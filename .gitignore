@@ -53,3 +53,6 @@ uploads/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Firebase temporary files
+.firebase/

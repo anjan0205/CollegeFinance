@@ -5,9 +5,10 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import apiRouter from './routes';
 import { initializeDatabasePool, closeDatabasePool } from './config/database';
-import { loadSeedData } from './utils/seedData';
-
+import { loadSeedData, syncDataFromFirebase, syncDataFromPostgres } from './utils/seedData';
+import { initializeFirebase } from './config/firebase';
 import { initializeSqlDatabase } from './config/sqlDatabase';
+import { initializePostgres, closePostgresPool } from './config/postgresDatabase';
 
 dotenv.config();
 
@@ -29,8 +30,7 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Initialize Seed Data from reference Excel
-loadSeedData();
+// Firebase configuration is initialized and synchronized asynchronously in startServer()
 
 // API Routes
 app.use('/api', apiRouter);
@@ -51,8 +51,27 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 
 // Start Server
 async function startServer() {
-  await initializeDatabasePool();
-  await initializeSqlDatabase();
+  initializeFirebase();
+  await syncDataFromFirebase();
+  const pgConnected = await initializePostgres();
+  if (pgConnected) {
+    await syncDataFromPostgres();
+    // Close import-time SQLite connection to release file locks
+    try {
+      const { sqliteDb } = require('./config/sqlDatabase');
+      if (sqliteDb) {
+        sqliteDb.close((err: any) => {
+          if (err) console.error('[SQLite] Error closing database:', err.message);
+          else console.log('[SQLite] Connection closed to release file locks.');
+        });
+      }
+    } catch (e: any) {
+      console.warn('[SQLite Close Warning]', e.message);
+    }
+  } else {
+    await initializeDatabasePool();
+    await initializeSqlDatabase();
+  }
 
   const server = app.listen(PORT, () => {
     console.log(`==================================================`);
@@ -64,6 +83,7 @@ async function startServer() {
   process.on('SIGINT', async () => {
     console.log('Shutting down server gracefully...');
     await closeDatabasePool();
+    await closePostgresPool();
     server.close(() => {
       console.log('HTTP server closed.');
       process.exit(0);

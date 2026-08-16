@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import * as XLSX from 'xlsx';
+import crypto from 'crypto';
 import { Department, BudgetHead, BudgetAllocation, PRRecord, PRItem, User } from '../types';
+import { getFirestoreDb, isFirebaseEnabled } from '../config/firebase';
+import { getPgStatus, queryPgAsync, executePgQuery } from '../config/postgresDatabase';
 
 let departments: Department[] = [];
 let budgetHeads: BudgetHead[] = [];
@@ -596,6 +599,7 @@ export function updateAllocationAmount(allocationId: number, newAllocatedAmount:
   if (alloc) {
     alloc.allocatedAmount = newAllocatedAmount;
     recalculateCommittedAmounts();
+    syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
     return alloc;
   }
   return null;
@@ -606,6 +610,7 @@ export function updateBudgetHeadAllocation(departmentId: number, budgetHeadId: n
   if (alloc) {
     alloc.allocatedAmount = newAllocatedAmount;
     recalculateCommittedAmounts();
+    syncAllocationToFirestore(departmentId, budgetHeadId);
     return alloc;
   }
   return null;
@@ -641,6 +646,8 @@ export function updatePRStatusRecord(
   }
 
   recalculateCommittedAmounts();
+  syncPRToFirestore(pr);
+  syncAllocationToFirestore(pr.departmentId, pr.budgetHeadId);
   return pr;
 }
 
@@ -666,23 +673,23 @@ export function createPRRecord(prInput: {
   const deptObj = departments.find(d => d.id === prInput.departmentId) || departments[0];
   const headObj = budgetHeads.find(bh => bh.id === prInput.budgetHeadId) || budgetHeads[0];
 
-  const nextId = prRecords.length > 0 ? Math.max(...prRecords.map(p => p.id)) + 1 : 1;
-  const prNumber = `PR-2026-${String(nextId).padStart(4, '0')}`;
+  const nextId = getPgStatus() ? crypto.randomUUID() : (prRecords.length > 0 ? Math.max(...prRecords.map(p => Number(p.id) || 0)) + 1 : 1);
+  const prNumber = `PR-2026-${String(prRecords.length + 1).padStart(4, '0')}`;
   const prDate = prInput.prDate || new Date().toISOString().substring(0, 10);
-
+ 
   const approvalStatus = prInput.approvalStatus || 'Approved';
   const status = prInput.status || (approvalStatus === 'Approved' ? 'Approved' : 'Pending');
-
+ 
   let totalAmount = 0;
-  let itemIdCounter = 1000 + nextId * 10;
+  let itemIdCounter = typeof nextId === 'number' ? (1000 + nextId * 10) : 0;
   const createdItems: PRItem[] = (prInput.items || []).map(item => {
     const qty = Math.max(1, item.quantity || 1);
     const price = Math.max(0, item.unitPrice || 0);
     const itemTotal = qty * price;
     totalAmount += itemTotal;
-
+ 
     return {
-      id: itemIdCounter++,
+      id: typeof nextId === 'number' ? itemIdCounter++ : crypto.randomUUID(),
       prId: nextId,
       productName: item.productName || 'Equipment / Service Item',
       productCode: `PROD-${itemIdCounter}`,
@@ -726,6 +733,8 @@ export function createPRRecord(prInput: {
   prItemsMap.set(nextId, createdItems);
 
   recalculateCommittedAmounts();
+  syncPRToFirestore(newPR);
+  syncAllocationToFirestore(newPR.departmentId, newPR.budgetHeadId);
   return newPR;
 }
 
@@ -744,7 +753,7 @@ export function createOrUpdateBudgetAllocation(
   if (alloc) {
     alloc.allocatedAmount = allocatedAmount;
   } else {
-    const nextId = budgetAllocations.length > 0 ? Math.max(...budgetAllocations.map(a => a.id)) + 1 : 1;
+    const nextId = getPgStatus() ? crypto.randomUUID() : (budgetAllocations.length > 0 ? Math.max(...budgetAllocations.map(a => Number(a.id) || 0)) + 1 : 1);
     alloc = {
       id: nextId,
       departmentId: deptObj ? deptObj.id : departmentId,
@@ -766,6 +775,7 @@ export function createOrUpdateBudgetAllocation(
   }
 
   recalculateCommittedAmounts();
+  syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
   return alloc;
 }
 
@@ -794,3 +804,402 @@ export function getSeedUsers(): User[] {
   loadSeedData();
   return users;
 }
+
+// ============================================================================
+// Firebase Firestore Sync Helpers
+// ============================================================================
+
+export async function syncAllocationToFirestore(departmentId: number, budgetHeadId: number) {
+  // Sync to Postgres in background
+  await syncAllocationToPostgres(departmentId, budgetHeadId);
+
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) return;
+
+  const alloc = budgetAllocations.find(a => a.departmentId === departmentId && a.budgetHeadId === budgetHeadId);
+  if (alloc) {
+    try {
+      const cleaned = JSON.parse(JSON.stringify(alloc));
+      await db.collection('budgetAllocations').doc(alloc.sourceBudgetCode).set(cleaned);
+      console.log(`[Firebase] Synced budget allocation ${alloc.sourceBudgetCode} to Firestore.`);
+    } catch (err: any) {
+      console.error(`[Firebase Error] Failed to sync allocation: ${err.message}`);
+    }
+  }
+}
+
+export async function syncPRToFirestore(pr: PRRecord) {
+  // Sync to Postgres in background
+  await syncPRToPostgres(pr);
+
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) return;
+
+  try {
+    const cleaned = JSON.parse(JSON.stringify(pr));
+    await db.collection('prs').doc(pr.prNumber).set(cleaned);
+    console.log(`[Firebase] Synced PR ${pr.prNumber} to Firestore.`);
+  } catch (err: any) {
+    console.error(`[Firebase Error] Failed to sync PR: ${err.message}`);
+  }
+}
+
+export async function syncDataFromFirebase(): Promise<boolean> {
+  if (!isFirebaseEnabled()) {
+    console.log('[Firebase] Not enabled. Skipping Firestore synchronization.');
+    return false;
+  }
+
+  const db = getFirestoreDb();
+  if (!db) {
+    console.log('[Firebase] Firestore DB not initialized. Skipping Firestore synchronization.');
+    return false;
+  }
+
+  try {
+    console.log('[Firebase] Syncing data from Firestore to memory...');
+    
+    // Fetch departments
+    const deptSnap = await db.collection('departments').get();
+    if (deptSnap.empty) {
+      console.log('[Firebase] Firestore is empty. Initializing with local Excel data...');
+      loadSeedData(true);
+      await seedFirebaseFromLocalData();
+      return true;
+    }
+
+    const fetchedDepts: Department[] = [];
+    deptSnap.forEach((doc: any) => fetchedDepts.push(doc.data() as Department));
+    departments = fetchedDepts.sort((a, b) => a.id - b.id);
+
+    // Fetch users
+    const userSnap = await db.collection('users').get();
+    const fetchedUsers: User[] = [];
+    userSnap.forEach((doc: any) => fetchedUsers.push(doc.data() as User));
+    users = fetchedUsers.sort((a, b) => a.id - b.id);
+
+    // Fetch budgetHeads
+    const bhSnap = await db.collection('budgetHeads').get();
+    const fetchedHeads: BudgetHead[] = [];
+    bhSnap.forEach((doc: any) => fetchedHeads.push(doc.data() as BudgetHead));
+    budgetHeads = fetchedHeads.sort((a, b) => a.id - b.id);
+
+    // Fetch budgetAllocations
+    const allocSnap = await db.collection('budgetAllocations').get();
+    const fetchedAllocs: BudgetAllocation[] = [];
+    allocSnap.forEach((doc: any) => fetchedAllocs.push(doc.data() as BudgetAllocation));
+    budgetAllocations = fetchedAllocs.sort((a, b) => a.id - b.id);
+
+    // Fetch prs
+    const prSnap = await db.collection('prs').get();
+    const fetchedPRs: PRRecord[] = [];
+    prSnap.forEach((doc: any) => {
+      const pr = doc.data() as PRRecord;
+      fetchedPRs.push(pr);
+      if (pr.items) {
+        prItemsMap.set(pr.id, pr.items);
+      }
+    });
+    prRecords = fetchedPRs.sort((a, b) => b.id - a.id);
+
+    isInitialized = true;
+    console.log(`[Firebase] Successfully synced from Firestore: ${departments.length} departments, ${users.length} users, ${budgetHeads.length} budget heads, ${budgetAllocations.length} allocations, ${prRecords.length} PRs.`);
+    return true;
+  } catch (error: any) {
+    console.error(`[Firebase Sync Error] Failed to sync from Firestore: ${error.message}`);
+    console.log('[Firebase] Falling back to local data modes.');
+    return false;
+  }
+}
+
+async function seedFirebaseFromLocalData() {
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) return;
+
+  try {
+    console.log('[Firebase] Seeding Firestore with local Excel data...');
+    const writeInBatches = async (collectionName: string, items: any[], getId: (item: any) => string) => {
+      let batch = db.batch();
+      let count = 0;
+      for (const item of items) {
+        const cleaned = JSON.parse(JSON.stringify(item));
+        const docRef = db.collection(collectionName).doc(getId(cleaned));
+        batch.set(docRef, cleaned);
+        count++;
+        if (count === 500) {
+          await batch.commit();
+          batch = db.batch();
+          count = 0;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+    };
+
+    await writeInBatches('departments', departments, (item) => item.code);
+    await writeInBatches('users', users, (item) => item.email);
+    await writeInBatches('budgetHeads', budgetHeads, (item) => String(item.code));
+    await writeInBatches('budgetAllocations', budgetAllocations, (item) => item.sourceBudgetCode);
+    await writeInBatches('prs', prRecords, (item) => item.prNumber);
+    console.log('[Firebase] Firestore seeding complete.');
+  } catch (err: any) {
+    console.error(`[Firebase Error] Failed to seed Firestore: ${err.message}`);
+  }
+}
+
+// ============================================================================
+// PostgreSQL Sync Helpers
+// ============================================================================
+
+export async function syncAllocationToPostgres(departmentId: number | string, budgetHeadId: number | string) {
+  if (!getPgStatus()) return;
+
+  const alloc = budgetAllocations.find(a => a.departmentId === departmentId && a.budgetHeadId === budgetHeadId);
+  if (alloc) {
+    try {
+      await executePgQuery(
+        `INSERT INTO budget_allocation 
+          (id, department_id, budget_head_id, source_budget_code, financial_year, 
+           allocated_amount, committed_amount, actual_utilized_amount, remaining_amount, 
+           utilization_percentage, alert_status) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (source_budget_code) DO UPDATE SET
+           allocated_amount = EXCLUDED.allocated_amount,
+           committed_amount = EXCLUDED.committed_amount,
+           actual_utilized_amount = EXCLUDED.actual_utilized_amount,
+           remaining_amount = EXCLUDED.remaining_amount,
+           utilization_percentage = EXCLUDED.utilization_percentage,
+           alert_status = EXCLUDED.alert_status`,
+        [
+          alloc.id, alloc.departmentId, alloc.budgetHeadId, alloc.sourceBudgetCode, alloc.financialYear,
+          alloc.allocatedAmount, alloc.committedAmount, alloc.actualUtilizedAmount,
+          alloc.remainingAmount, alloc.utilizationPercentage, alloc.alertStatus
+        ]
+      );
+      console.log(`[PostgreSQL] Synced budget allocation ${alloc.sourceBudgetCode} to Cloud SQL.`);
+    } catch (err: any) {
+      console.error(`[PostgreSQL Error] Failed to sync allocation: ${err.message}`);
+    }
+  }
+}
+
+export async function syncPRToPostgres(pr: PRRecord) {
+  if (!getPgStatus()) return;
+
+  try {
+    // 1. Upsert PR Record
+    await executePgQuery(
+      `INSERT INTO purchase_request 
+        (id, pr_number, pr_date, department_id, budget_head_id, requested_by, 
+         purpose, total_amount, status, approval_status, pr_po_status, 
+         approval1, approval2, approval3, source_budget_code) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (pr_number) DO UPDATE SET
+         pr_date = EXCLUDED.pr_date,
+         purpose = EXCLUDED.purpose,
+         total_amount = EXCLUDED.total_amount,
+         status = EXCLUDED.status,
+         approval_status = EXCLUDED.approval_status,
+         pr_po_status = EXCLUDED.pr_po_status,
+         approval1 = EXCLUDED.approval1,
+         approval2 = EXCLUDED.approval2,
+         approval3 = EXCLUDED.approval3`,
+      [
+        pr.id, pr.prNumber, pr.prDate, pr.departmentId, pr.budgetHeadId, pr.requestedBy,
+        pr.purpose || '', pr.totalAmount, pr.status, pr.approvalStatus, pr.prPoStatus,
+        pr.approval1 || '', pr.approval2 || '', pr.approval3 || '', pr.sourceBudgetCode
+      ]
+    );
+
+    // 2. Clear old PR Items
+    await executePgQuery('DELETE FROM purchase_request_item WHERE purchase_request_id = $1', [pr.id]);
+
+    // 3. Re-insert items
+    const items = prItemsMap.get(pr.id) || [];
+    for (const item of items) {
+      const itemUuid = crypto.randomUUID();
+      await executePgQuery(
+        `INSERT INTO purchase_request_item 
+          (id, purchase_request_id, product_name, product_code, product_type, product_description, 
+           unit_type_name, quantity, unit_price, total_value, current_stock, 
+           preferred_vendor, product_required_by, item_remarks) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          itemUuid, pr.id, item.productName, item.productCode || '', item.productType || 'goods',
+          item.productDescription || '', item.unitTypeName || 'Numbers', item.quantity,
+          item.unitPrice, item.totalValue, item.currentStock || 0, item.preferredVendor || '',
+          item.productRequiredBy || '', item.itemRemarks || ''
+        ]
+      );
+    }
+
+    console.log(`[PostgreSQL] Synced PR ${pr.prNumber} and ${items.length} items to Cloud SQL.`);
+  } catch (err: any) {
+    console.error(`[PostgreSQL Error] Failed to sync PR: ${err.message}`);
+  }
+}
+
+export async function syncDataFromPostgres(): Promise<boolean> {
+  if (!getPgStatus()) {
+    console.log('[PostgreSQL] Not enabled. Skipping PostgreSQL synchronization.');
+    return false;
+  }
+
+  try {
+    console.log('[PostgreSQL] Syncing data from Cloud SQL to memory...');
+    
+    // Fetch departments
+    const dbDepts = await queryPgAsync<any>('SELECT id, dept_code as code, dept_name as name, category FROM department');
+    if (dbDepts.length === 0) {
+      console.log('[PostgreSQL] Database is empty. Seeding with local Excel data...');
+      loadSeedData(true);
+      return true;
+    }
+    departments = dbDepts.map((d: any) => ({
+      id: d.id,
+      code: d.code,
+      name: d.name,
+      category: d.category
+    })).sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+
+    // Fetch users
+    const dbUsers = await queryPgAsync<any>('SELECT id, name, email, role, department_id as "departmentId" FROM "user"');
+    users = dbUsers.map((u: any) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      departmentId: u.departmentId
+    })).sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+
+    // Fetch budget heads
+    const dbHeads = await queryPgAsync<any>('SELECT id, budget_head_code as code, name, category, description FROM budget_head');
+    budgetHeads = dbHeads.map((h: any) => ({
+      id: h.id,
+      code: Number(h.code),
+      name: h.name,
+      category: h.category,
+      description: h.description
+    })).sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+
+    // Fetch allocations
+    const dbAllocations = await queryPgAsync<any>(`
+      SELECT id, department_id as "departmentId", budget_head_id as "budgetHeadId", source_budget_code as "sourceBudgetCode", financial_year as "financialYear",
+             allocated_amount as "allocatedAmount", committed_amount as "committedAmount", actual_utilized_amount as "actualUtilizedAmount", remaining_amount as "remainingAmount",
+             utilization_percentage as "utilizationPercentage", alert_status as "alertStatus"
+      FROM budget_allocation
+    `);
+    
+    const deptMap = new Map(departments.map(d => [d.id, d]));
+    const headMap = new Map(budgetHeads.map(h => [h.id, h]));
+
+    budgetAllocations = dbAllocations.map((a: any) => {
+      const dept = deptMap.get(a.departmentId);
+      const head = headMap.get(a.budgetHeadId);
+      return {
+        id: a.id,
+        departmentId: a.departmentId,
+        departmentCode: dept ? dept.code : '',
+        departmentName: dept ? dept.name : '',
+        budgetHeadId: a.budgetHeadId,
+        budgetHeadCode: head ? head.code : 0,
+        budgetHeadName: head ? head.name : '',
+        sourceBudgetCode: a.sourceBudgetCode,
+        financialYear: a.financialYear,
+        allocatedAmount: Number(a.allocatedAmount),
+        committedAmount: Number(a.committedAmount),
+        actualUtilizedAmount: Number(a.actualUtilizedAmount),
+        remainingAmount: Number(a.remainingAmount),
+        utilizationPercentage: Number(a.utilizationPercentage),
+        alertStatus: a.alertStatus as any
+      };
+    }).sort((a: any, b: any) => String(a.id).localeCompare(String(b.id)));
+
+    // Fetch PRs
+    const dbPRs = await queryPgAsync<any>(`
+      SELECT id, pr_number as "prNumber", to_char(pr_date, 'YYYY-MM-DD') as "prDate", department_id as "departmentId", budget_head_id as "budgetHeadId", requested_by as "requestedBy",
+             purpose, total_amount as "totalAmount", status, approval_status as "approvalStatus", pr_po_status as "prPoStatus",
+             approval1, approval2, approval3, source_budget_code as "sourceBudgetCode"
+      FROM purchase_request
+    `);
+
+    // Fetch PR Items
+    const dbPRItems = await queryPgAsync<any>(`
+      SELECT id, purchase_request_id as "prId", product_name as "productName", product_code as "productCode", product_type as "productType", product_description as "productDescription",
+             unit_type_name as "unitTypeName", quantity, unit_price as "unitPrice", total_value as "totalValue", current_stock as "currentStock",
+             preferred_vendor as "preferredVendor", product_required_by as "productRequiredBy", item_remarks as "itemRemarks"
+      FROM purchase_request_item
+    `);
+
+    // Group items by prId
+    const itemsByPrId = new Map<string, PRItem[]>();
+    dbPRItems.forEach((item: any) => {
+      const mappedItem: PRItem = {
+        id: item.id,
+        prId: item.prId,
+        productName: item.productName,
+        productCode: item.productCode,
+        productType: item.productType,
+        productDescription: item.productDescription,
+        unitTypeName: item.unitTypeName,
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.unitPrice),
+        totalValue: Number(item.totalValue),
+        currentStock: Number(item.currentStock),
+        preferredVendor: item.preferredVendor,
+        productRequiredBy: item.productRequiredBy,
+        itemRemarks: item.itemRemarks
+      };
+      if (!itemsByPrId.has(item.prId)) {
+        itemsByPrId.set(item.prId, []);
+      }
+      itemsByPrId.get(item.prId)!.push(mappedItem);
+    });
+
+    prRecords = dbPRs.map((p: any) => {
+      const dept = deptMap.get(p.departmentId);
+      const head = headMap.get(p.budgetHeadId);
+      const items = itemsByPrId.get(p.id) || [];
+      prItemsMap.set(p.id, items);
+      
+      return {
+        id: p.id,
+        prNumber: p.prNumber,
+        prDate: p.prDate,
+        departmentId: p.departmentId,
+        departmentCode: dept ? dept.code : '',
+        departmentName: dept ? dept.name : '',
+        budgetHeadId: p.budgetHeadId,
+        budgetHeadCode: head ? head.code : 0,
+        budgetHeadName: head ? head.name : '',
+        requestedBy: p.requestedBy,
+        purpose: p.purpose,
+        totalAmount: Number(p.totalAmount),
+        status: p.status as any,
+        approvalStatus: p.approvalStatus as any,
+        prPoStatus: p.prPoStatus as any,
+        approval1: p.approval1,
+        approval2: p.approval2,
+        approval3: p.approval3,
+        sourceBudgetCode: p.sourceBudgetCode,
+        items
+      };
+    }).sort((a: any, b: any) => String(b.id).localeCompare(String(a.id)));
+
+    isInitialized = true;
+    console.log(`[PostgreSQL] Successfully synced from Cloud SQL: ${departments.length} departments, ${users.length} users, ${budgetHeads.length} budget heads, ${budgetAllocations.length} allocations, ${prRecords.length} PRs.`);
+    return true;
+  } catch (error: any) {
+    console.error(`[PostgreSQL Sync Error] Failed to sync from Cloud SQL: ${error.message}`);
+    return false;
+  }
+}
+
+async function seedPostgresFromLocalData() {
+  console.log('[PostgreSQL] Database seeding is handled by seedPostgres script.');
+}
+

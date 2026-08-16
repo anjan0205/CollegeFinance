@@ -1,24 +1,24 @@
 export type UserRole = 'ADMIN' | 'FINANCE' | 'HOD' | 'DEPARTMENT_USER';
 
 export interface User {
-  id: number;
+  id: number | string;
   name: string;
   email: string;
   role: UserRole;
-  departmentId?: number | null;
+  departmentId?: number | string | null;
   departmentCode?: string | null;
   departmentName?: string | null;
 }
 
 export interface Department {
-  id: number;
+  id: number | string;
   code: string;
   name: string;
   category: string;
 }
 
 export interface BudgetHead {
-  id: number;
+  id: number | string;
   code: number;
   name: string;
   category: string;
@@ -26,11 +26,11 @@ export interface BudgetHead {
 }
 
 export interface BudgetAllocation {
-  id: number;
-  departmentId: number;
+  id: number | string;
+  departmentId: number | string;
   departmentCode: string;
   departmentName: string;
-  budgetHeadId: number;
+  budgetHeadId: number | string;
   budgetHeadCode: number;
   budgetHeadName: string;
   sourceBudgetCode: string;
@@ -44,8 +44,8 @@ export interface BudgetAllocation {
 }
 
 export interface PRItem {
-  id: number;
-  prId: number;
+  id: number | string;
+  prId: number | string;
   productName: string;
   productCode?: string;
   productType?: string;
@@ -61,17 +61,17 @@ export interface PRItem {
 }
 
 export interface PRRecord {
-  id: number;
+  id: number | string;
   prNumber: string;
   prDate: string;
-  departmentId: number;
+  departmentId: number | string;
   departmentCode: string;
   departmentName: string;
-  budgetHeadId: number;
+  budgetHeadId: number | string;
   budgetHeadCode: number;
   budgetHeadName: string;
   requestedBy: string;
-  purpose?: string;
+  purpose: string;
   totalAmount: number;
   status: 'Open' | 'Approved' | 'Pending' | 'Rejected' | 'Closed';
   approvalStatus: 'Approved' | 'Pending' | 'Rejected';
@@ -79,28 +79,28 @@ export interface PRRecord {
   approval1?: string;
   approval2?: string;
   approval3?: string;
-  sourceBudgetCode: string;
-  items?: PRItem[];
+  sourceBudgetCode?: string;
+  items: PRItem[];
 }
 
 export interface ImportBatch {
-  id: number;
-  batchType: 'BUDGET' | 'PR';
+  id: number | string;
+  batchType: string;
   filename: string;
   totalRows: number;
   importedCount: number;
   updatedCount: number;
   skippedCount: number;
   errorCount: number;
-  importedBy?: number;
-  createdAt: string;
+  importedBy?: number | string | null;
+  createdAt?: string;
 }
 
-export interface ImportErrorRecord {
-  id: number;
-  batchId: number;
+export interface ImporterErrorRecord {
+  id: number | string;
+  batchId: number | string;
   rowNumber: number;
-  prNumber?: string;
+  prNumber?: string | null;
   errorMessage: string;
-  rawData?: string;
+  rawData?: string | null;
 }
