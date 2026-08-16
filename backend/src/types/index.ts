@@ -22,6 +22,7 @@ export interface BudgetHead {
   code: number;
   name: string;
   category: string;
+  description?: string;
 }
 
 export interface BudgetAllocation {
