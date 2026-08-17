@@ -56,7 +56,7 @@ export async function getPRs(req: AuthenticatedRequest, res: Response) {
     if (budgetCode && budgetCode !== 'ALL') {
       prs = prs.filter(p => 
         String(p.budgetHeadCode) === String(budgetCode) || 
-        p.sourceBudgetCode.includes(String(budgetCode))
+        (p.sourceBudgetCode && p.sourceBudgetCode.includes(String(budgetCode)))
       );
     }
 

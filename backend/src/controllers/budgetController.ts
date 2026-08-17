@@ -11,7 +11,7 @@ export async function getMasterBudget(req: AuthenticatedRequest, res: Response) 
 
     // Group allocations by budget head
     const headSummaryMap: Record<number, {
-      id: number;
+      id: number | string;
       code: number;
       name: string;
       category: string;

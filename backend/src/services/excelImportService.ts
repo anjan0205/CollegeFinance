@@ -1,19 +1,20 @@
 import * as XLSX from 'xlsx';
 import path from 'path';
 import fs from 'fs';
-import { PRRecord, ImportBatch, ImportErrorRecord, PRItem } from '../types';
+import { PRRecord, ImportBatch, ImporterErrorRecord, PRItem } from '../types';
 import { getSeedPRRecords, getSeedBudgetAllocations, recalculateCommittedAmounts, getSeedDepartments, getSeedBudgetHeads, loadSeedData } from '../utils/seedData';
 import { sqliteDb, runSqlAsync } from '../config/sqlDatabase';
 
 export interface ImportResult {
   batch: ImportBatch;
-  errors: ImportErrorRecord[];
+  errors: ImporterErrorRecord[];
 }
 
 let batchIdCounter = 2; // 1 is reserved for initial command-line seed import
 let errorIdCounter = 1;
+let itemIdCounter = 1;
 const importBatchesHistory: ImportBatch[] = [];
-const importErrorsMap: Map<number, ImportErrorRecord[]> = new Map();
+const importErrorsMap: Map<number, ImporterErrorRecord[]> = new Map();
 
 // Helper to normalize department codes
 function normalizeDeptCode(raw: any, remarksHint?: string): string {
@@ -88,17 +89,19 @@ export async function processPRExcelImport(filePath: string, filename: string, u
   const allocations = getSeedBudgetAllocations();
 
   const batchId = batchIdCounter++;
-  const errors: ImportErrorRecord[] = [];
+  const errors: ImporterErrorRecord[] = [];
 
   let importedCount = 0;
   let updatedCount = 0;
   let skippedCount = 0;
   let errorCount = 0;
+  let totalRows = 0;
 
   if (isBudget) {
     // Parse Budget proposals
     const sheetName = workbook.SheetNames.find(s => s.toLowerCase().includes('budget')) || workbook.SheetNames[0];
     const rows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+    totalRows = rows.length;
     
     if (rows.length > 2) {
       const headerCodeRow = rows[0];
@@ -183,6 +186,7 @@ export async function processPRExcelImport(filePath: string, filename: string, u
 
     const sheet = workbook.Sheets[sheetName];
     const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+    totalRows = rows.length;
     let rowIdx = 2;
 
     const prMap = new Map<string, PRRecord>();
@@ -299,7 +303,7 @@ export async function processPRExcelImport(filePath: string, filename: string, u
     id: batchId,
     batchType: isBudget ? 'BUDGET' : 'PR',
     filename,
-    totalRows: isBudget ? allocations.length : rows.length,
+    totalRows,
     importedCount,
     updatedCount,
     skippedCount,
@@ -331,6 +335,6 @@ export function getImportBatches(): ImportBatch[] {
   return importBatchesHistory;
 }
 
-export function getImportErrors(batchId: number): ImportErrorRecord[] {
+export function getImportErrors(batchId: number): ImporterErrorRecord[] {
   return importErrorsMap.get(batchId) || [];
 }

@@ -24,6 +24,8 @@ node_modules/
 **/.env.*
 !.env.example
 !**/.env.example
+serviceAccountKey.json
+**/serviceAccountKey.json
 
 # Database Files & SQLite Stores (Prevents exposing dataset on GitHub)
 *.sqlite

@@ -32,6 +32,12 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Firebase configuration is initialized and synchronized asynchronously in startServer()
 
+// Request Logger Middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(`[HTTP Request] ${req.method} ${req.url}`);
+  next();
+});
+
 // API Routes
 app.use('/api', apiRouter);
 
@@ -94,3 +100,4 @@ async function startServer() {
 startServer();
 
 export default app;
+// Trigger restart to load Firebase service account key (Firestore DB initialized)

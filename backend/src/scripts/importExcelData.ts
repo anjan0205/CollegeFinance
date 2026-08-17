@@ -175,7 +175,7 @@ export async function runFullImport(excelFilePath?: string): Promise<any> {
           category: meta.category
         };
         departmentList.push(deptObj);
-        deptCodeToIdMap.set(normCode.toUpperCase(), deptObj.id);
+        deptCodeToIdMap.set(normCode.toUpperCase(), deptObj.id as number);
       }
 
       deptColumns.push({
@@ -195,7 +195,7 @@ export async function runFullImport(excelFilePath?: string): Promise<any> {
       category: 'Administrative'
     };
     departmentList.push(finDept);
-    deptCodeToIdMap.set('FINANCE', finDept.id);
+    deptCodeToIdMap.set('FINANCE', finDept.id as number);
   }
 
   console.log(`✅ Extracted ${departmentList.length} Unique Departments.`);
@@ -362,7 +362,7 @@ export async function runFullImport(excelFilePath?: string): Promise<any> {
       let deptObj = departmentList.find(d => d.id === deptId);
       if (!deptObj) {
         deptObj = departmentList[0];
-        deptId = deptObj.id;
+        deptId = deptObj.id as number;
       }
 
       // Budget Head Resolution
@@ -387,7 +387,7 @@ export async function runFullImport(excelFilePath?: string): Promise<any> {
       let headObj = budgetHeadList.find(h => h.id === headId);
       if (!headObj) {
         headObj = budgetHeadList[0];
-        headId = headObj.id;
+        headId = headObj.id as number;
       }
 
       const prDate = parseExcelDate(row['PR Requested Date'] || meta?.requestedDate, '2026-07-01');

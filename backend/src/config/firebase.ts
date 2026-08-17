@@ -29,9 +29,12 @@ export function initializeFirebase(): boolean {
 
     if (hasServiceAccount) {
       console.log(`[Firebase] Initializing with service account key: ${serviceAccountPath}`);
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+      const actualProjectId = serviceAccount.project_id || projectId;
+      console.log(`[Firebase] Detected project ID: ${actualProjectId}`);
       initializeApp({
         credential: cert(serviceAccountPath),
-        projectId
+        projectId: actualProjectId
       });
       isInitialized = true;
     } else if (hasGoogleCreds) {

@@ -10,7 +10,7 @@ let departments: Department[] = [];
 let budgetHeads: BudgetHead[] = [];
 let budgetAllocations: BudgetAllocation[] = [];
 let prRecords: PRRecord[] = [];
-let prItemsMap: Map<number, PRItem[]> = new Map();
+let prItemsMap: Map<number | string, PRItem[]> = new Map();
 let users: User[] = [];
 
 let isInitialized = false;
@@ -196,7 +196,7 @@ export function loadSeedData(forceReload: boolean = false) {
                 category: meta.category as any
               };
               departments.push(deptObj);
-              deptCodeToIdMap.set(normCode.toUpperCase(), deptObj.id);
+              deptCodeToIdMap.set(normCode.toUpperCase(), deptObj.id as number);
             }
 
             deptColumns.push({
@@ -216,7 +216,7 @@ export function loadSeedData(forceReload: boolean = false) {
             category: 'Administrative'
           };
           departments.push(finDept);
-          deptCodeToIdMap.set('FINANCE', finDept.id);
+          deptCodeToIdMap.set('FINANCE', finDept.id as number);
         }
 
         // Parse Budget Heads & Allocations
@@ -246,7 +246,7 @@ export function loadSeedData(forceReload: boolean = false) {
               description: meta?.respPerson ? `Responsible Person: ${meta.respPerson}` : undefined
             };
             budgetHeads.push(bHead);
-            headCodeToIdMap.set(codeNum, bHead.id);
+            headCodeToIdMap.set(codeNum, bHead.id as number);
           }
 
           // Department Allocations
@@ -809,7 +809,7 @@ export function getSeedUsers(): User[] {
 // Firebase Firestore Sync Helpers
 // ============================================================================
 
-export async function syncAllocationToFirestore(departmentId: number, budgetHeadId: number) {
+export async function syncAllocationToFirestore(departmentId: number | string, budgetHeadId: number | string) {
   // Sync to Postgres in background
   await syncAllocationToPostgres(departmentId, budgetHeadId);
 
@@ -872,25 +872,25 @@ export async function syncDataFromFirebase(): Promise<boolean> {
 
     const fetchedDepts: Department[] = [];
     deptSnap.forEach((doc: any) => fetchedDepts.push(doc.data() as Department));
-    departments = fetchedDepts.sort((a, b) => a.id - b.id);
+    departments = fetchedDepts.sort((a, b) => Number(a.id) - Number(b.id));
 
     // Fetch users
     const userSnap = await db.collection('users').get();
     const fetchedUsers: User[] = [];
     userSnap.forEach((doc: any) => fetchedUsers.push(doc.data() as User));
-    users = fetchedUsers.sort((a, b) => a.id - b.id);
+    users = fetchedUsers.sort((a, b) => Number(a.id) - Number(b.id));
 
     // Fetch budgetHeads
     const bhSnap = await db.collection('budgetHeads').get();
     const fetchedHeads: BudgetHead[] = [];
     bhSnap.forEach((doc: any) => fetchedHeads.push(doc.data() as BudgetHead));
-    budgetHeads = fetchedHeads.sort((a, b) => a.id - b.id);
+    budgetHeads = fetchedHeads.sort((a, b) => Number(a.id) - Number(b.id));
 
     // Fetch budgetAllocations
     const allocSnap = await db.collection('budgetAllocations').get();
     const fetchedAllocs: BudgetAllocation[] = [];
     allocSnap.forEach((doc: any) => fetchedAllocs.push(doc.data() as BudgetAllocation));
-    budgetAllocations = fetchedAllocs.sort((a, b) => a.id - b.id);
+    budgetAllocations = fetchedAllocs.sort((a, b) => Number(a.id) - Number(b.id));
 
     // Fetch prs
     const prSnap = await db.collection('prs').get();
@@ -902,7 +902,7 @@ export async function syncDataFromFirebase(): Promise<boolean> {
         prItemsMap.set(pr.id, pr.items);
       }
     });
-    prRecords = fetchedPRs.sort((a, b) => b.id - a.id);
+    prRecords = fetchedPRs.sort((a, b) => Number(b.id) - Number(a.id));
 
     isInitialized = true;
     console.log(`[Firebase] Successfully synced from Firestore: ${departments.length} departments, ${users.length} users, ${budgetHeads.length} budget heads, ${budgetAllocations.length} allocations, ${prRecords.length} PRs.`);

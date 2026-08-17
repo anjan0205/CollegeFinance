@@ -21,6 +21,7 @@ export async function importPRData(req: AuthenticatedRequest, res: Response) {
       errors: result.errors
     });
   } catch (err: any) {
+    console.error('[Import Error]', err);
     return res.status(500).json({
       success: false,
       message: `Excel import failed: ${err.message}`
@@ -47,6 +48,7 @@ export async function importBudgetData(req: AuthenticatedRequest, res: Response)
       errors: result.errors
     });
   } catch (err: any) {
+    console.error('[Import Error]', err);
     return res.status(500).json({ success: false, message: `Budget import failed: ${err.message}` });
   }
 }
