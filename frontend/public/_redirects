@@ -1,0 +1,2 @@
+/api/* https://college-finance-backend.college-budget-pr-backend.workers.dev/api/:splat 200
+/* /index.html 200

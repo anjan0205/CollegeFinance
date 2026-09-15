@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "codebase-cleanup-refactor-clean": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/codebase-cleanup-refactor-clean/SKILL.md",
+      "computedHash": "c855f7eb1cd221fd041ace88ae17861418c36dbdf1301a456550bf482e0630b1"
+    },
+    "firebase-security-rules-auditor": {
+      "source": "firebase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/firebase-security-rules-auditor/SKILL.md",
+      "computedHash": "be877f6c7aaf460791dd6103a08906734036c26bd7c686cfdb8b60e4b2f65742"
+    }
+  }
+}

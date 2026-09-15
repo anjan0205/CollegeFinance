@@ -1,0 +1,23 @@
+# Backend Dependencies
+node_modules/
+
+# Local environment variables & secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+serviceAccountKey*.json
+
+
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+database/
+
+# Uploads
+uploads/
+
+# Build
+dist/

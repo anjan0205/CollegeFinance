@@ -1,0 +1,12 @@
+specVersion: "v1alpha"
+serviceId: "collegefinance-87409-service"
+location: "us-east4"
+schema:
+  source: "schema"
+  datasource:
+    postgresql:
+      database: "collegefinance-87409-database"
+      cloudSql:
+        instanceId: "collegefinance-87409-instance"
+connectorDirs:
+  - "connector"

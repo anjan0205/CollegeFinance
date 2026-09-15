@@ -1,0 +1,35 @@
+name = "college-finance-backend"
+main = "src/index.ts"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["enable_nodejs_http_server_modules", "nodejs_compat"]
+
+[define]
+__dirname = '""'
+__filename = '""'
+
+[vars]
+PORT = "5000"
+CLIENT_URL = "https://collegefinance-87409.web.app"
+# For local development, create a '.dev.vars' file in this folder and add these secrets:
+# JWT_SECRET="..."
+# FIREBASE_SERVICE_ACCOUNT_JSON="..."
+# For production deployment, set them using:
+# wrangler secret put JWT_SECRET
+# wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON
+
+
+# Mark native database modules as external to prevent esbuild bundler compilation errors
+# Cloudflare Workers won't bundle them, and since we operate in 100% Firebase Firestore Mode, they are never executed.
+[build]
+command = ""
+
+[[rules]]
+type = "ESModule"
+globs = ["**/*.js", "**/*.ts"]
+
+[alias]
+sqlite3 = "./src/mocks/empty.ts"
+oracledb = "./src/mocks/empty.ts"
+pg = "./src/mocks/empty.ts"
+pg-native = "./src/mocks/empty.ts"
+iconv-lite = "./src/mocks/empty.ts"
