@@ -26,6 +26,7 @@ import { AddVendorMasterPage } from './pages/erp/AddVendorMasterPage';
 import { MasterDataApprovalPage } from './pages/erp/MasterDataApprovalPage';
 import { EmailApprovalActionPage } from './pages/erp/EmailApprovalActionPage';
 import { QuotationManagementPage } from './pages/erp/QuotationManagementPage';
+import { RFQManagementPage } from './pages/erp/RFQManagementPage';
 import { GRNDataPage } from './pages/erp/GRNDataPage';
 import { InventoryRegisterPage } from './pages/erp/InventoryRegisterPage';
 import { StockIssuePage } from './pages/erp/StockIssuePage';
@@ -172,6 +173,7 @@ export const App: React.FC = () => {
             <Route path="erp/add-vendor" element={<AddVendorMasterPage />} />
             <Route path="erp/master-approval" element={<MasterDataApprovalPage />} />
             <Route path="erp/quotations" element={<QuotationManagementPage />} />
+            <Route path="erp/rfq" element={<RFQManagementPage />} />
             <Route path="erp/pr-data" element={<Navigate to="/prs/all" replace />} />
             <Route path="erp/po-data" element={<Navigate to="/pos/raise" replace />} />
             <Route path="erp/grn-data" element={<GRNDataPage />} />

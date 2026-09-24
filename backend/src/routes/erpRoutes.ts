@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import * as erpController from '../controllers/erpController';
+import * as rfqController from '../controllers/rfqController';
+import { ApprovalEngine } from '../services/approvalEngine';
 
 const router = Router();
 
@@ -8,6 +10,26 @@ router.get('/master', erpController.getMasterData);
 router.post('/master', erpController.createMasterData);
 router.get('/master/approvals', erpController.getPendingMasterApprovals);
 router.post('/master/approve', erpController.approveMasterData);
+
+// Approval Matrix Engine
+router.get('/approval-matrix', (req, res) => {
+  res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+});
+router.post('/approval-matrix', (req, res) => {
+  const { rules } = req.body;
+  if (rules && Array.isArray(rules)) {
+    ApprovalEngine.updateMatrixRules(rules);
+    return res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+  }
+  return res.status(400).json({ success: false, message: 'Invalid matrix rules format' });
+});
+
+// RFQs (Request for Quotations)
+router.get('/rfqs', rfqController.getRFQs);
+router.get('/rfqs/:id', rfqController.getRFQById);
+router.post('/rfqs', rfqController.createRFQ);
+router.post('/rfqs/quote', rfqController.submitQuote);
+router.post('/rfqs/select-vendor', rfqController.selectWinningQuote);
 
 // Quotations
 router.get('/quotations', erpController.getQuotations);
@@ -61,3 +83,4 @@ router.post('/projects', erpController.createProject);
 router.get('/summary', erpController.getERPSummary);
 
 export default router;
+

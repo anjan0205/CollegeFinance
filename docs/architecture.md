@@ -121,7 +121,9 @@ sequenceDiagram
   - **`POManagement.tsx`**: 8-subsection purchase order suite (`Raise PO`, `Add Direct PO`, `My POs`, `All Hold PO`, `Rejected PO`, `Close PO`, `Direct Import`, `Modify PO`).
   - **`erp/AddVendorMasterPage.tsx`**: Multi-tab vendor onboarding form with Basic Info, Banking/TDS, Add-ons, Dynamic Multi-location Addresses, and Document Verification.
   - **`erp/MasterDataApprovalPage.tsx`**: 2-tier approval hub with real-time pipeline status and simulated email client.
+  - **`erp/RFQManagementPage.tsx`**: RFQ broadcast management, side-by-side vendor quote comparison matrix, lowest-cost/fastest-delivery highlights, vendor ratings, non-lowest justification comments, and automated PO awarding.
   - **`erp/EmailApprovalActionPage.tsx`**: Lightweight gateway processing one-click direct email authorization links.
+  - **`components/erp/ApprovalMatrixConfigModal.tsx`**: Configurator for setting spend thresholds, approval tier hierarchies, role assignments, and SLA hours.
 
 - **`services/`**:
   - **`api.ts`**: Axios instance configured with base URLs and authorization header interceptors.
@@ -130,13 +132,17 @@ sequenceDiagram
 
 ### 3.2 Backend Architecture (`backend/src`)
 
+- **`services/`**:
+  - **`approvalEngine.ts`**: Configurable rules engine evaluating spend tiers (≤ ₹15k, ₹15k–₹1.25L, ₹1.25L–₹11L, > ₹11L), snapshotting approval levels at PR creation, processing sequential/parallel level advances, send-back/reject handling, delegation windows, and SLA escalation tracking.
 - **`routes/`**:
   - **`index.ts`**: Centralized routing hub coordinating auth, dashboard, budget, PR, invoice, import, and ERP sub-routers.
-  - **`erpRoutes.ts`**: Dedicated endpoints for master data, quotations, PRs, POs, GRNs, inventory, invoices, and payments.
+  - **`erpRoutes.ts`**: Dedicated endpoints for master data, approval matrix, RFQs, quotes, PRs, POs, GRNs, inventory, invoices, and payments.
 - **`controllers/`**:
   - **`erpController.ts`**: Core business logic implementing transactional rules for all 14 P2P modules.
+  - **`rfqController.ts`**: Endpoints for RFQ creation, vendor quote submission, side-by-side quote evaluation, non-lowest selection justification, and winning vendor PO issuance.
   - **`authController.ts`**: JWT token generation and credential verification.
   - **`budgetController.ts`**: Budget allocation limits, utilization calculations, and fiscal year rollover.
+
 - **`middleware/`**:
   - **`auth.ts`**: JWT authentication and role-based access control (`authenticateToken`, `authorizeRoles`).
   - **`upload.ts`**: Multer streaming upload handler for Excel data ingestion.
