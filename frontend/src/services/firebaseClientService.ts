@@ -1,13 +1,19 @@
-import { collection, getDocs, doc, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../config/firebase';
-import { 
-  EMBEDDED_DEPARTMENTS, 
-  EMBEDDED_BUDGET_HEADS, 
-  EMBEDDED_BUDGET_ALLOCATIONS, 
-  EMBEDDED_PRS, 
-  EMBEDDED_INVOICES, 
-  EMBEDDED_USERS 
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { db, authReady } from '../config/firebase';
+import {
+  EMBEDDED_DEPARTMENTS,
+  EMBEDDED_BUDGET_HEADS,
+  EMBEDDED_BUDGET_ALLOCATIONS,
+  EMBEDDED_PRS,
+  EMBEDDED_INVOICES,
+  EMBEDDED_USERS
 } from '../data/embeddedMasterDataset';
+import {
+  SEED_MASTERS, SEED_QUOTATIONS, SEED_POS, SEED_GRNS, SEED_INVENTORY, SEED_STOCK_ISSUES,
+  SEED_INVOICES as SEED_ERP_INVOICES, SEED_PAYMENTS, SEED_PART_PAYMENTS, SEED_DC_NOTES, SEED_PROJECTS
+} from '../data/erpSeedData';
+import { logAudit } from './auditService';
+import { canTransition, EntityKind } from '../config/statusLifecycles';
 
 let cacheDepts = [...EMBEDDED_DEPARTMENTS];
 let cacheHeads = [...EMBEDDED_BUDGET_HEADS];
@@ -16,19 +22,95 @@ let cachePRs = [...EMBEDDED_PRS];
 let cacheInvoices = [...EMBEDDED_INVOICES];
 let cacheUsers = [...EMBEDDED_USERS];
 
-let isSyncedFromFirestore = false;
+// ERP Procure-to-Pay caches (seeded from erpSeedData, synced from Firestore).
+let cacheErpMasters: Record<string, any[]> = {
+  vendors: [], items: [], departments: [], costCenters: [], uoms: [], stores: []
+};
+let cacheQuotations: any[] = [];
+let cacheErpPos: any[] = [];
+let cacheGrns: any[] = [];
+let cacheInventory: any[] = [];
+let cacheStockIssues: any[] = [];
+let cacheErpInvoices: any[] = [];
+let cacheErpPayments: any[] = [];
+let cachePartPayments: any[] = [];
+let cacheDcNotes: any[] = [];
+let cacheProjects: any[] = [];
+let erpSeeded = false;
+
+// Fresh-on-fetch sync control: re-read Firestore with a 60s TTL or immediately on mutation.
+let lastSyncAt = 0;
+const SYNC_TTL_MS = 60000; // 60 seconds TTL (writes trigger immediate markStale)
+let syncInFlight: Promise<void> | null = null;
+
+// Force the next read to re-sync from Firestore (call after any write).
+function markStale() {
+  lastSyncAt = 0;
+}
+
+// Next numeric id that will not collide with (and overwrite) an existing doc.
+function nextId(arr: any[]): number {
+  return arr.reduce((max, item) => Math.max(max, Number(item?.id) || 0), 0) + 1;
+}
 
 async function fetchFirestoreCollection(colName: string): Promise<any[]> {
   try {
     const snap = await getDocs(collection(db, colName));
     const docs: any[] = [];
     snap.forEach(d => {
-      docs.push(d.data());
+      const data = d.data() as any;
+      // The seed script stores the record's id as the Firestore document key and
+      // strips the `id` field from the data. Restore it, and keep the real
+      // document key (`_docId`) so writes/deletes target the correct document.
+      docs.push({ ...data, id: data.id ?? d.id, _docId: d.id });
     });
     return docs;
   } catch (e) {
     return [];
   }
+}
+
+// Generate a fresh string id/document-number pair for a new ERP record.
+function erpNewId(prefix: string): string {
+  return `${prefix}-${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+}
+function erpNewNumber(prefix: string): string {
+  return `${prefix}/2026/${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+// The uid of the acting user, read from the cached session (see AuthContext).
+function actingUid(): string {
+  try {
+    const raw = localStorage.getItem('college_budget_user');
+    if (raw) {
+      const u = JSON.parse(raw);
+      return String(u?.email || u?.name || u?.id || 'system');
+    }
+  } catch { /* ignore */ }
+  return 'system';
+}
+
+// Stamp the standard transactional document fields required by
+// docs/architecture.md §3 (refNumber/createdBy/timestamps/history). Idempotent —
+// only fills fields the caller has not already set.
+function stampCreate(rec: any, refNumber?: string): any {
+  const now = new Date().toISOString();
+  const by = actingUid();
+  if (refNumber && !rec.refNumber) rec.refNumber = refNumber;
+  if (!rec.createdBy) rec.createdBy = by;
+  if (!rec.createdAt) rec.createdAt = now;
+  rec.updatedAt = now;
+  if (!Array.isArray(rec.history)) rec.history = [];
+  rec.history.push({ by, action: 'CREATE', at: now });
+  return rec;
+}
+
+// Append a history entry + bump updatedAt on a mutation (§3).
+function appendHistory(rec: Record<string, any>, action: string, note?: string): void {
+  const now = new Date().toISOString();
+  rec.updatedAt = now;
+  if (!Array.isArray(rec.history)) rec.history = [];
+  rec.history.push({ by: actingUid(), action, at: now, ...(note ? { note } : {}) });
 }
 
 function recalculateCommittedAmounts() {
@@ -98,30 +180,116 @@ function recalculateCommittedAmounts() {
   });
 }
 
-export async function syncClientWithFirestore() {
-  if (isSyncedFromFirestore) return;
-  try {
-    const prDocs = await fetchFirestoreCollection('prs');
-    if (prDocs.length >= 50) {
-      cachePRs = prDocs.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
-    }
-    const deptDocs = await fetchFirestoreCollection('departments');
-    if (deptDocs.length > 0) cacheDepts = deptDocs.sort((a, b) => Number(a.id) - Number(b.id));
-    
-    const headDocs = await fetchFirestoreCollection('budgetHeads');
-    if (headDocs.length > 0) cacheHeads = headDocs.sort((a, b) => Number(a.id) - Number(b.id));
-    
-    const allocDocs = await fetchFirestoreCollection('budgetAllocations');
-    if (allocDocs.length > 0) cacheAllocs = allocDocs.sort((a, b) => Number(a.id) - Number(b.id));
+async function pullFromFirestore() {
+  // Ensure the anonymous Firebase session is established before reading, so the
+  // request carries an auth token that satisfies the security rules.
+  await authReady;
 
-    const invDocs = await fetchFirestoreCollection('invoices');
-    if (invDocs.length > 0) cacheInvoices = invDocs.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+  const [
+    prDocs,
+    deptDocs,
+    headDocs,
+    allocDocs,
+    invDocs,
+    erpMastersDocs,
+    quotationsDocs,
+    erpPosDocs,
+    grnsDocs,
+    inventoryDocs,
+    stockIssuesDocs,
+    erpInvoicesDocs,
+    paymentsDocs,
+    partPaymentsDocs,
+    dcNotesDocs,
+    projectsDocs,
+  ] = await Promise.all([
+    fetchFirestoreCollection('prs'),
+    fetchFirestoreCollection('departments'),
+    fetchFirestoreCollection('budgetHeads'),
+    fetchFirestoreCollection('budgetAllocations'),
+    fetchFirestoreCollection('invoices'),
+    fetchFirestoreCollection('erpMasters'),
+    fetchFirestoreCollection('quotations'),
+    fetchFirestoreCollection('erpPos'),
+    fetchFirestoreCollection('grns'),
+    fetchFirestoreCollection('inventory'),
+    fetchFirestoreCollection('stockIssues'),
+    fetchFirestoreCollection('erpInvoices'),
+    fetchFirestoreCollection('payments'),
+    fetchFirestoreCollection('partPayments'),
+    fetchFirestoreCollection('dcNotes'),
+    fetchFirestoreCollection('projects'),
+  ]);
 
-    recalculateCommittedAmounts();
-    isSyncedFromFirestore = true;
-  } catch (err) {
-    recalculateCommittedAmounts();
+  if (prDocs.length > 0) {
+    cachePRs = prDocs.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
   }
+  if (deptDocs.length > 0) cacheDepts = deptDocs.sort((a, b) => Number(a.id) - Number(b.id));
+  if (headDocs.length > 0) cacheHeads = headDocs.sort((a, b) => Number(a.id) - Number(b.id));
+  if (allocDocs.length > 0) cacheAllocs = allocDocs.sort((a, b) => Number(a.id) - Number(b.id));
+  if (invDocs.length > 0) cacheInvoices = invDocs.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+
+  // Process ERP Masters
+  let mastersList = erpMastersDocs;
+  if (mastersList.length === 0) {
+    const all: any[] = [];
+    Object.entries(SEED_MASTERS).forEach(([type, items]) => {
+      (items as any[]).forEach(it => all.push({ ...it, masterType: type }));
+    });
+    Promise.all(all.map(it => setDoc(doc(db, 'erpMasters', String(it.id)), it).catch(() => {})));
+    mastersList = all.map(it => ({ ...it, _docId: String(it.id) }));
+  }
+  const grouped: Record<string, any[]> = { vendors: [], items: [], departments: [], costCenters: [], uoms: [], stores: [] };
+  mastersList.forEach(d => {
+    if (grouped[d.masterType]) grouped[d.masterType].push(d);
+  });
+  cacheErpMasters = grouped;
+
+  // Process ERP collections with fallback
+  const processCol = (docs: any[], seed: any[], colName: string) => {
+    if (docs.length > 0) return docs;
+    if (seed.length > 0) {
+      Promise.all(seed.map(item => setDoc(doc(db, colName, String(item.id)), item).catch(() => {})));
+      return seed.map(s => ({ ...s, _docId: String(s.id) }));
+    }
+    return [];
+  };
+
+  cacheQuotations = processCol(quotationsDocs, SEED_QUOTATIONS, 'quotations');
+  cacheErpPos = processCol(erpPosDocs, SEED_POS, 'erpPos');
+  cacheGrns = processCol(grnsDocs, SEED_GRNS, 'grns');
+  cacheInventory = processCol(inventoryDocs, SEED_INVENTORY, 'inventory');
+  cacheStockIssues = processCol(stockIssuesDocs, SEED_STOCK_ISSUES, 'stockIssues');
+  cacheErpInvoices = processCol(erpInvoicesDocs, SEED_ERP_INVOICES, 'erpInvoices');
+  cacheErpPayments = processCol(paymentsDocs, SEED_PAYMENTS, 'payments');
+  cachePartPayments = processCol(partPaymentsDocs, SEED_PART_PAYMENTS, 'partPayments');
+  cacheDcNotes = processCol(dcNotesDocs, SEED_DC_NOTES, 'dcNotes');
+  cacheProjects = processCol(projectsDocs, SEED_PROJECTS, 'projects');
+  erpSeeded = true;
+
+  recalculateCommittedAmounts();
+}
+
+export async function syncClientWithFirestore() {
+  // Fresh-on-fetch: re-read the DB when the cache is stale (TTL) or has never
+  // been loaded. Concurrent callers (e.g. a page firing several requests at
+  // once) share a single in-flight pull instead of each hitting Firestore.
+  const isFresh = lastSyncAt !== 0 && Date.now() - lastSyncAt < SYNC_TTL_MS;
+  if (isFresh) return;
+  if (syncInFlight) return syncInFlight;
+
+  syncInFlight = (async () => {
+    try {
+      await pullFromFirestore();
+      lastSyncAt = Date.now();
+    } catch (err) {
+      recalculateCommittedAmounts();
+    } finally {
+      syncInFlight = null;
+    }
+  })();
+
+  return syncInFlight;
 }
 
 // Client Handlers
@@ -317,8 +485,10 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
       alloc.allocatedAmount = Number(allocatedAmount);
       recalculateCommittedAmounts();
       try {
-        await setDoc(doc(db, 'budgetAllocations', String(alloc.id)), alloc, { merge: true });
+        await setDoc(doc(db, 'budgetAllocations', String(alloc._docId || alloc.id)), alloc, { merge: true });
+        markStale();
       } catch (e) {}
+      void logAudit('UPDATE', 'BudgetAllocation', String(alloc.sourceBudgetCode || alloc.id), `Allocation set to ₹${alloc.allocatedAmount} (${alloc.departmentCode})`);
       return { data: { success: true, data: alloc } };
     }
     return { data: { success: false, message: 'Allocation not found' } };
@@ -415,19 +585,21 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
   // PR List (/prs)
   if (cleanUrl === '/prs' || cleanUrl === '/prs/') {
     if (method === 'POST') {
-      const newPR = {
+      const newId = nextId(cachePRs);
+      const newPR = stampCreate({
         ...body,
-        id: cachePRs.length + 1,
-        prNumber: body.prNumber || `PR-2026-MANUAL-${cachePRs.length + 1}`,
-        createdAt: new Date().toISOString(),
+        id: newId,
+        prNumber: body.prNumber || `PR-2026-MANUAL-${newId}`,
         approvalStatus: body.approvalStatus || 'Approved',
         status: body.status || 'Approved'
-      };
+      }, body.prNumber || `PR-2026-MANUAL-${newId}`);
       cachePRs.unshift(newPR);
       recalculateCommittedAmounts();
       try {
         await setDoc(doc(db, 'prs', String(newPR.id)), newPR);
+        markStale(); // ensure the next fetch reflects the persisted record
       } catch (e) {}
+      void logAudit('CREATE', 'PR', newPR.prNumber, `Created PR for ${newPR.departmentName || newPR.departmentCode || 'department'} — ₹${newPR.totalAmount || 0}`);
       return { data: { success: true, data: newPR } };
     }
 
@@ -539,13 +711,34 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
     const prId = cleanUrl.replace('/prs/', '').split('/')[0];
     const pr = cachePRs.find(p => String(p.id) === prId || p.prNumber.toLowerCase() === prId.toLowerCase());
     if (pr) {
-      if (method === 'PATCH' && cleanUrl.endsWith('/status')) {
-        pr.approvalStatus = body.approvalStatus || pr.approvalStatus;
-        pr.status = body.status || pr.status;
+      if (method === 'DELETE') {
+        cachePRs = cachePRs.filter(p => p.id !== pr.id);
         recalculateCommittedAmounts();
         try {
-          await setDoc(doc(db, 'prs', String(pr.id)), pr, { merge: true });
+          await deleteDoc(doc(db, 'prs', String(pr._docId || pr.id)));
+          markStale();
         } catch (e) {}
+        void logAudit('DELETE', 'PR', pr.prNumber, `Deleted PR (₹${pr.totalAmount || 0})`);
+        return { data: { success: true, data: { id: pr.id, prNumber: pr.prNumber } } };
+      }
+      if (method === 'PATCH' && cleanUrl.endsWith('/status')) {
+        const prevApproval = pr.approvalStatus;
+        const nextApproval = body.approvalStatus || pr.approvalStatus;
+        // Validate against the PR lifecycle governance layer (§4). Legacy approval
+        // values not in the canonical map are permitted (canTransition returns ok).
+        const check = canTransition('PR', prevApproval, nextApproval, body.actorRole);
+        if (!check.ok) {
+          return { data: { success: false, message: check.reason } };
+        }
+        pr.approvalStatus = nextApproval;
+        pr.status = body.status || pr.status;
+        appendHistory(pr, `STATUS ${prevApproval} → ${nextApproval}`, body.remarks);
+        recalculateCommittedAmounts();
+        try {
+          await setDoc(doc(db, 'prs', String(pr._docId || pr.id)), pr, { merge: true });
+          markStale();
+        } catch (e) {}
+        void logAudit('UPDATE', 'PR', pr.prNumber, `Status ${prevApproval} → ${pr.approvalStatus}`);
         return { data: { success: true, data: pr } };
       }
       return { data: { success: true, data: pr } };
@@ -555,18 +748,20 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
   // Invoices List & Management (/invoices)
   if (cleanUrl === '/invoices' || cleanUrl === '/invoices/') {
     if (method === 'POST') {
-      const newInvoice = {
+      const newId = nextId(cacheInvoices);
+      const newInvoice = stampCreate({
         ...body,
-        id: cacheInvoices.length + 1,
-        invoiceNumber: body.invoiceNumber || `INV-2026-${cacheInvoices.length + 1}`,
-        createdAt: new Date().toISOString(),
+        id: newId,
+        invoiceNumber: body.invoiceNumber || `INV-2026-${newId}`,
         status: body.status || 'Paid'
-      };
+      }, body.invoiceNumber || `INV-2026-${newId}`);
       cacheInvoices.unshift(newInvoice);
       recalculateCommittedAmounts();
       try {
         await setDoc(doc(db, 'invoices', String(newInvoice.id)), newInvoice);
+        markStale();
       } catch (e) {}
+      void logAudit('CREATE', 'Invoice', newInvoice.invoiceNumber, `Invoice for ${newInvoice.vendorName || 'vendor'} — ₹${newInvoice.totalAmount || 0}`);
       return { data: { success: true, data: newInvoice } };
     }
 
@@ -639,8 +834,10 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
         inv.status = body.status || inv.status;
         recalculateCommittedAmounts();
         try {
-          await setDoc(doc(db, 'invoices', String(inv.id)), inv, { merge: true });
+          await setDoc(doc(db, 'invoices', String(inv._docId || inv.id)), inv, { merge: true });
+          markStale();
         } catch (e) {}
+        void logAudit('UPDATE', 'Invoice', inv.invoiceNumber, `Status → ${inv.status}`);
         return { data: { success: true, data: inv } };
       }
       return { data: { success: true, data: inv } };
@@ -757,7 +954,7 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
     if (method === 'POST') {
       const newUser = {
         ...body,
-        id: cacheUsers.length + 1,
+        id: nextId(cacheUsers),
         createdAt: new Date().toISOString()
       };
       cacheUsers.push(newUser);
@@ -913,6 +1110,189 @@ export async function handleClientRequest(url: string, method: string = 'GET', p
         ].slice(0, 50)
       }
     };
+  }
+
+  // ===========================================================================
+  // ERP Procure-to-Pay module endpoints (vendors, quotations, POs, GRNs,
+  // inventory, stock issues, invoices, payments, part-payments, DC notes,
+  // projects). Backed by their own Firestore collections, seeded on first use.
+  // ===========================================================================
+
+  // Master data list / create (GET|POST /erp/master)
+  if (cleanUrl === '/erp/master') {
+    if (method === 'POST') {
+      const type = body.type as string;
+      const prefix = (type || 'MSTR').toUpperCase().slice(0, 4);
+      const newItem = stampCreate({ ...body.data, id: erpNewId(prefix), masterType: type, status: 'PENDING_APPROVAL' });
+      if (!cacheErpMasters[type]) cacheErpMasters[type] = [];
+      cacheErpMasters[type].unshift(newItem);
+      try {
+        await setDoc(doc(db, 'erpMasters', String(newItem.id)), newItem);
+        markStale();
+      } catch (e) {}
+      void logAudit('CREATE', `Master:${type}`, newItem.id, `Added ${newItem.name || newItem.code || 'record'}`);
+      return { data: { success: true, data: newItem } };
+    }
+    const type = String(params.type || 'vendors');
+    return { data: { success: true, data: cacheErpMasters[type] || [] } };
+  }
+
+  // Pending master approvals (GET /erp/master/approvals)
+  if (cleanUrl === '/erp/master/approvals') {
+    const pending: any[] = [];
+    Object.entries(cacheErpMasters).forEach(([type, items]) => {
+      items.forEach(item => {
+        if (item.status === 'PENDING_APPROVAL') pending.push({ type, record: item });
+      });
+    });
+    return { data: { success: true, data: pending } };
+  }
+
+  // Approve / reject master (POST /erp/master/approve)
+  if (cleanUrl === '/erp/master/approve' && method === 'POST') {
+    const { type, id, action, remarks } = body;
+    const target = (cacheErpMasters[type] || []).find((item: any) => item.id === id);
+    if (target) {
+      target.status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+      try {
+        await setDoc(doc(db, 'erpMasters', String(target._docId || target.id)), target, { merge: true });
+        markStale();
+      } catch (e) {}
+      void logAudit(action === 'APPROVE' ? 'APPROVE' : 'REJECT', `Master:${type}`, id, remarks || '');
+    }
+    return { data: { success: true, data: target } };
+  }
+
+  // Quotations (GET|POST /erp/quotations, POST /erp/quotations/:id/select-winner)
+  if (cleanUrl === '/erp/quotations') {
+    if (method === 'POST') {
+      const rec = stampCreate({ ...body, id: erpNewId('QUOTE'), status: body.status || 'SUBMITTED' }, body.quoteNumber);
+      cacheQuotations.unshift(rec);
+      try { await setDoc(doc(db, 'quotations', String(rec.id)), rec); markStale(); } catch (e) {}
+      void logAudit('CREATE', 'Quotation', rec.quoteNumber || rec.id, `Quote from ${rec.vendorName || 'vendor'}`);
+      return { data: { success: true, data: rec } };
+    }
+    return { data: { success: true, data: cacheQuotations } };
+  }
+  if (cleanUrl.startsWith('/erp/quotations/') && cleanUrl.endsWith('/select-winner') && method === 'POST') {
+    const qId = cleanUrl.replace('/erp/quotations/', '').replace('/select-winner', '');
+    const q = cacheQuotations.find(x => String(x.id) === qId);
+    if (q) {
+      q.status = 'SELECTED';
+      try { await setDoc(doc(db, 'quotations', String(q._docId || q.id)), q, { merge: true }); markStale(); } catch (e) {}
+      void logAudit('APPROVE', 'Quotation', q.quoteNumber || q.id, `Selected as winning vendor: ${q.vendorName || ''}`);
+    }
+    return { data: { success: true, data: q } };
+  }
+
+  // Generic ERP collections: list + create
+  const ERP_COLLECTIONS: Record<string, { cache: any[]; col: string; idPrefix: string; numberField?: string; numberPrefix?: string; defaultStatus?: string; dateField?: string; entity: string }> = {
+    '/erp/pos': { cache: cacheErpPos, col: 'erpPos', idPrefix: 'PO', numberField: 'poNumber', numberPrefix: 'PO', defaultStatus: 'APPROVED', dateField: 'poDate', entity: 'PurchaseOrder' },
+    '/erp/grns': { cache: cacheGrns, col: 'grns', idPrefix: 'GRN', numberField: 'grnNumber', numberPrefix: 'GRN', defaultStatus: 'VERIFIED', dateField: 'receivedDate', entity: 'GRN' },
+    '/erp/inventory': { cache: cacheInventory, col: 'inventory', idPrefix: 'INV', entity: 'Inventory' },
+    '/erp/stock-issues': { cache: cacheStockIssues, col: 'stockIssues', idPrefix: 'ISS', numberField: 'issueNumber', numberPrefix: 'ISS', defaultStatus: 'ISSUED', dateField: 'issueDate', entity: 'StockIssue' },
+    '/erp/invoices': { cache: cacheErpInvoices, col: 'erpInvoices', idPrefix: 'INV', numberField: 'invoiceNumber', numberPrefix: 'INV', defaultStatus: 'PENDING_APPROVAL', entity: 'ERPInvoice' },
+    '/erp/payments': { cache: cacheErpPayments, col: 'payments', idPrefix: 'PAY', numberField: 'paymentNumber', numberPrefix: 'PAY', defaultStatus: 'PROCESSED', dateField: 'paymentDate', entity: 'Payment' },
+    '/erp/part-payments': { cache: cachePartPayments, col: 'partPayments', idPrefix: 'PP', defaultStatus: 'PENDING_APPROVAL', entity: 'PartPayment' },
+    '/erp/dc-notes': { cache: cacheDcNotes, col: 'dcNotes', idPrefix: 'DC', numberField: 'noteNumber', numberPrefix: 'DC', defaultStatus: 'APPROVED', dateField: 'noteDate', entity: 'DCNote' },
+    '/erp/projects': { cache: cacheProjects, col: 'projects', idPrefix: 'PROJ', defaultStatus: 'PLANNED', entity: 'Project' }
+  };
+  if (ERP_COLLECTIONS[cleanUrl]) {
+    const cfg = ERP_COLLECTIONS[cleanUrl];
+    if (method === 'POST') {
+      const rec: any = { ...body, id: erpNewId(cfg.idPrefix) };
+      if (cfg.numberField && !rec[cfg.numberField]) rec[cfg.numberField] = erpNewNumber(cfg.numberPrefix || cfg.idPrefix);
+      if (cfg.defaultStatus && !rec.status) rec.status = cfg.defaultStatus;
+      if (cfg.dateField && !rec[cfg.dateField]) rec[cfg.dateField] = new Date().toISOString().split('T')[0];
+      if (cfg.entity === 'Project') { rec.committedAmount = rec.committedAmount || 0; rec.actualSpent = rec.actualSpent || 0; }
+      if (cfg.entity === 'ERPInvoice') rec.matched3Way = rec.matched3Way ?? true;
+      stampCreate(rec, cfg.numberField ? rec[cfg.numberField] : undefined);
+      cfg.cache.unshift(rec);
+      try { await setDoc(doc(db, cfg.col, String(rec.id)), rec); markStale(); } catch (e) {}
+      void logAudit('CREATE', cfg.entity, rec[cfg.numberField || 'id'] || rec.id, '');
+      return { data: { success: true, data: rec } };
+    }
+    return { data: { success: true, data: cfg.cache } };
+  }
+
+  // Generic status transition (POST /erp/:collection/:id/transition, body {to, role, note})
+  // Central governance point per §4/§7: validates the transition against the
+  // lifecycle map + role, appends history, then persists. Never sets status blindly.
+  if (cleanUrl.startsWith('/erp/') && cleanUrl.endsWith('/transition') && method === 'POST') {
+    const parts = cleanUrl.replace('/erp/', '').replace('/transition', '').split('/');
+    const colKey = parts[0];
+    const recId = parts[1];
+    const TRANSITION_MAP: Record<string, { cache: any[]; col: string; entity: EntityKind }> = {
+      pos: { cache: cacheErpPos, col: 'erpPos', entity: 'PO' },
+      grns: { cache: cacheGrns, col: 'grns', entity: 'GRN' },
+      invoices: { cache: cacheErpInvoices, col: 'erpInvoices', entity: 'INVOICE' },
+      payments: { cache: cacheErpPayments, col: 'payments', entity: 'PAYMENT' },
+      'dc-notes': { cache: cacheDcNotes, col: 'dcNotes', entity: 'DC_NOTE' },
+      'stock-issues': { cache: cacheStockIssues, col: 'stockIssues', entity: 'STOCK_ISSUE' }
+    };
+    const cfg = TRANSITION_MAP[colKey];
+    if (cfg) {
+      const rec = cfg.cache.find(r => String(r.id) === recId);
+      if (!rec) return { data: { success: false, message: 'Record not found' } };
+      const to = body.to as string;
+      const check = canTransition(cfg.entity, rec.status, to, body.role);
+      if (!check.ok) return { data: { success: false, message: check.reason } };
+      const prev = rec.status;
+      rec.status = to;
+      appendHistory(rec, `STATUS ${prev} → ${to}`, body.note);
+      try { await setDoc(doc(db, cfg.col, String(rec._docId || rec.id)), rec, { merge: true }); markStale(); } catch (e) {}
+      void logAudit('UPDATE', cfg.entity, rec.refNumber || rec.id, `Status ${prev} → ${to}`);
+      return { data: { success: true, data: rec } };
+    }
+  }
+
+  // ERP summary metrics (GET /erp/summary)
+  if (cleanUrl === '/erp/summary') {
+    return {
+      data: {
+        success: true,
+        data: {
+          totalPRs: cachePRs.length,
+          totalPOs: cacheErpPos.length,
+          totalGRNs: cacheGrns.length,
+          totalInvoices: cacheErpInvoices.length,
+          pendingApprovalsCount:
+            cachePRs.filter(p => p.approvalStatus === 'Pending').length +
+            (cacheErpMasters.vendors || []).filter((v: any) => v.status === 'PENDING_APPROVAL').length,
+          totalInventoryValue: cacheInventory.reduce((sum, i) => sum + (i.totalValue || 0), 0),
+          activeProjectsCount: cacheProjects.filter(p => p.status === 'ACTIVE').length,
+          totalPaymentsProcessed: cacheErpPayments.reduce((sum, p) => sum + (p.amountPaid || 0), 0)
+        }
+      }
+    };
+  }
+
+  // Global search across PRs, POs, vendors and invoices (GET /search?q=)
+  if (cleanUrl === '/search') {
+    const q = String(params.q || params.search || '').toLowerCase().trim();
+    if (!q) return { data: { success: true, data: [] } };
+    const results: Array<{ type: string; label: string; sublabel: string; route: string }> = [];
+    cachePRs.forEach(p => {
+      if ((p.prNumber || '').toLowerCase().includes(q) || (p.departmentName || '').toLowerCase().includes(q) || (p.purpose || '').toLowerCase().includes(q)) {
+        results.push({ type: 'PR', label: p.prNumber, sublabel: `${p.departmentName || p.departmentCode} · ₹${p.totalAmount || 0}`, route: '/prs/all' });
+      }
+    });
+    cacheErpPos.forEach(p => {
+      if ((p.poNumber || '').toLowerCase().includes(q) || (p.vendorName || '').toLowerCase().includes(q)) {
+        results.push({ type: 'PO', label: p.poNumber, sublabel: `${p.vendorName || ''} · ₹${p.netAmount || p.totalAmount || 0}`, route: '/pos/my-pos' });
+      }
+    });
+    (cacheErpMasters.vendors || []).forEach((v: any) => {
+      if ((v.name || '').toLowerCase().includes(q) || (v.code || '').toLowerCase().includes(q) || (v.gstNo || '').toLowerCase().includes(q)) {
+        results.push({ type: 'Vendor', label: v.name, sublabel: `${v.code} · ${v.category || ''}`, route: '/erp/master-data' });
+      }
+    });
+    cacheInvoices.forEach(inv => {
+      if ((inv.invoiceNumber || '').toLowerCase().includes(q) || (inv.vendorName || '').toLowerCase().includes(q)) {
+        results.push({ type: 'Invoice', label: inv.invoiceNumber, sublabel: `${inv.vendorName || ''} · ₹${inv.totalAmount || 0}`, route: '/invoices' });
+      }
+    });
+    return { data: { success: true, data: results.slice(0, 20) } };
   }
 
   // Fallback default response

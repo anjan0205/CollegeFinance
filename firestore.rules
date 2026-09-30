@@ -1,9 +1,52 @@
 rules_version = '2';
 
+// Two-layer security model (docs/architecture.md §7): these rules are the
+// defense-in-depth layer; the client engine's transitionStatus (equivalent
+// server-side logic per target §9) is the primary role + valid-transition check.
+//
+// NOTE on the current auth model: the web client establishes a Firebase
+// Anonymous session (see frontend/src/config/firebase.ts). Anonymous sessions
+// carry no role custom claim and have no /users/{uid} profile, so enforcing the
+// role matrix below at the rules layer would lock the live app out. The
+// role-aware helpers are therefore defined and documented here but the effective
+// grant stays "any authenticated session" until real per-user Firebase Auth +
+// custom claims are introduced. When that lands, swap the marked lines.
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Role of the caller, read from their profile doc. Returns null for anonymous
+    // sessions (no profile), which is why role checks are not yet enforced.
+    function callerRole() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function isAdmin() {
+      return callerRole() == 'ADMIN';
+    }
+
+    function isApprover() {
+      return callerRole() in ['ADMIN', 'FINANCE', 'HOD', 'PRINCIPAL', 'CEO'];
+    }
+
+    // --- Effective grant (anonymous-session compatible) ---------------------
+    // TODO: once real per-user auth + role claims exist, replace the blanket
+    // rule below with per-collection role rules, e.g.:
+    //   match /purchaseRequisitions/{id} {
+    //     allow read: if isSignedIn();
+    //     allow create: if isSignedIn();
+    //     allow update: if isApprover();
+    //   }
+    //   match /masterData/{doc=**} { allow write: if isAdmin(); }
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if isSignedIn();
     }
   }
 }

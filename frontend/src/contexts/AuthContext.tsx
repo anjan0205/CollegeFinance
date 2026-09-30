@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
+import api from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -20,16 +21,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const savedToken = localStorage.getItem('college_budget_token');
     const savedUser = localStorage.getItem('college_budget_user');
-    const API_BASE = `${window.location.protocol}//${window.location.hostname}:5000/api`;
+
+    // Restore a cached session immediately so a reload never bounces the user to
+    // /login while the profile refresh is in flight (in production the API is the
+    // client engine; on localhost it is the :5000 backend — the `api` service
+    // routes correctly for both).
+    const restoreCached = (): boolean => {
+      if (savedToken && savedUser) {
+        try {
+          setToken(savedToken);
+          setUser(JSON.parse(savedUser));
+          return true;
+        } catch {
+          /* corrupt cache — fall through to auto-login */
+        }
+      }
+      return false;
+    };
 
     const autoLogin = () => {
-      fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'admin@vignan.ac.in', password: 'admin' })
-      })
-        .then(res => res.json())
-        .then(data => {
+      api
+        .post('/auth/login', { email: 'admin@vignan.ac.in', password: 'admin' })
+        .then(res => {
+          const data = res.data;
           if (data.success && data.token && data.user) {
             setToken(data.token);
             setUser(data.user);
@@ -41,27 +55,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .finally(() => setIsLoading(false));
     };
 
-    if (savedToken && savedUser) {
-      fetch(`${API_BASE}/auth/profile`, {
-        headers: { 'Authorization': `Bearer ${savedToken}` }
-      })
+    if (restoreCached()) {
+      // Refresh the profile in the background; keep the cached session on failure.
+      api
+        .get('/auth/profile')
         .then(res => {
-          if (res.ok) {
-            return res.json().then(data => {
-              if (data.success && data.user) {
-                setToken(savedToken);
-                setUser(data.user);
-                localStorage.setItem('college_budget_user', JSON.stringify(data.user));
-                setIsLoading(false);
-              } else {
-                autoLogin();
-              }
-            });
-          } else {
-            autoLogin();
+          const data = res.data;
+          if (data?.success && data.user) {
+            setUser(data.user);
+            localStorage.setItem('college_budget_user', JSON.stringify(data.user));
           }
         })
-        .catch(() => autoLogin());
+        .catch(() => {
+          /* offline / no backend — keep the cached session, do not log out */
+        })
+        .finally(() => setIsLoading(false));
     } else {
       autoLogin();
     }

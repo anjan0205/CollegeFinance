@@ -54,6 +54,7 @@ export interface BudgetHeadItem {
 
 export interface BudgetAllocation {
   id: number;
+  _docId?: string;
   departmentId: number;
   departmentCode: string;
   departmentName: string;
@@ -89,6 +90,7 @@ export interface PRItem {
 
 export interface PRRecord {
   id: number;
+  _docId?: string;
   prNumber: string;
   prDate: string;
   departmentId: number;
@@ -185,6 +187,7 @@ export interface DashboardSummaryData {
 
 export interface InvoiceRecord {
   id: number | string;
+  _docId?: string;
   invoiceNumber: string;
   invoiceDate: string;
   prId: number | string;

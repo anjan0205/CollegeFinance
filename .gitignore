@@ -66,3 +66,7 @@ Thumbs.db
 # Cloudflare Wrangler
 .wrangler/
 
+# AI Agent Configuration & Rules (Option B)
+.agents/
+AGENTS.md
+skills-lock.json

@@ -22,6 +22,7 @@ import {
   PackageCheck
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { canAccess, isExecutiveRole } from '../config/permissions';
 
 export const Sidebar: React.FC = () => {
   const { user } = useAuth();
@@ -33,7 +34,7 @@ export const Sidebar: React.FC = () => {
   const [erpOpen, setErpOpen] = useState(location.pathname.startsWith('/erp') && !location.pathname.startsWith('/erp/po'));
 
   const role = user?.role || 'DEPARTMENT_USER';
-  const isExecutive = role === 'PRINCIPAL' || role === 'CEO' || Boolean(user?.email?.toLowerCase().includes('principal')) || Boolean(user?.email?.toLowerCase().includes('ceo'));
+  const isExecutive = isExecutiveRole(role);
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen sticky top-0 border-r border-slate-800 flex-shrink-0 select-none shadow-xl z-20">
@@ -156,10 +157,8 @@ export const Sidebar: React.FC = () => {
           )}
         </div>
 
-        {/* Non-Executive Modules (Hidden for Principal & CEO) */}
-        {!isExecutive && (
-          <>
-            {/* Budget Collapsible Group */}
+        {/* Budget Collapsible Group */}
+        {canAccess(role, 'budget') && (
             <div>
               <button
                 onClick={() => setBudgetOpen(!budgetOpen)}
@@ -225,8 +224,10 @@ export const Sidebar: React.FC = () => {
                 </div>
               )}
             </div>
+        )}
 
             {/* PO Management Collapsible Group */}
+            {canAccess(role, 'po') && (
             <div>
               <button
                 onClick={() => setPoOpen(!poOpen)}
@@ -260,8 +261,10 @@ export const Sidebar: React.FC = () => {
                 </div>
               )}
             </div>
+            )}
 
             {/* ERP Procure-to-Pay & Inventory Modules */}
+            {canAccess(role, 'erp') && (
             <div>
               <button
                 onClick={() => setErpOpen(!erpOpen)}
@@ -301,8 +304,10 @@ export const Sidebar: React.FC = () => {
                 </div>
               )}
             </div>
+            )}
 
             {/* Invoices */}
+            {canAccess(role, 'invoices') && (
             <NavLink
               to="/invoices"
               className={({ isActive }) =>
@@ -316,9 +321,27 @@ export const Sidebar: React.FC = () => {
               <Receipt className="w-4.5 h-4.5 text-emerald-400" />
               <span className="font-bold">Invoices</span>
             </NavLink>
+            )}
 
-            {/* Reports (Admin only) */}
-            {role === 'ADMIN' && (
+            {/* Audit Trail (Admin & Finance) */}
+            {canAccess(role, 'audit') && (
+              <NavLink
+                to="/audit"
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                    isActive
+                      ? 'bg-brand-600 text-white font-bold shadow-sm'
+                      : 'text-slate-200 hover:bg-slate-800 hover:text-white font-bold'
+                  }`
+                }
+              >
+                <ShieldAlert className="w-4.5 h-4.5 text-rose-400" />
+                <span className="font-bold">Audit Trail</span>
+              </NavLink>
+            )}
+
+            {/* Reports (role-gated) */}
+            {canAccess(role, 'reports') && (
               <NavLink
                 to="/reports"
                 className={({ isActive }) =>
@@ -334,8 +357,8 @@ export const Sidebar: React.FC = () => {
               </NavLink>
             )}
 
-            {/* User Management (Admin only) */}
-            {role === 'ADMIN' && (
+            {/* User Management (role-gated) */}
+            {canAccess(role, 'users') && (
               <NavLink
                 to="/users"
                 className={({ isActive }) =>
@@ -352,6 +375,7 @@ export const Sidebar: React.FC = () => {
             )}
 
             {/* Unified Settings Menu */}
+            {canAccess(role, 'settings') && (
             <NavLink
               to="/settings"
               className={({ isActive }) =>
@@ -365,8 +389,7 @@ export const Sidebar: React.FC = () => {
               <Settings className="w-4.5 h-4.5 text-slate-400" />
               <span className="font-bold">Settings</span>
             </NavLink>
-          </>
-        )}
+            )}
       </div>
 
       {/* Role Footer */}

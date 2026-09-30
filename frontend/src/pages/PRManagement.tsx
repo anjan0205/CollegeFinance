@@ -156,6 +156,25 @@ export const PRManagement: React.FC = () => {
     }
   };
 
+  const handleDeletePR = async (prToDelete: PRRecord, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const confirmed = window.confirm(
+      `Delete PR ${prToDelete.prNumber} (${formatINR(prToDelete.totalAmount)})?\n\nThis permanently removes it from the database and cannot be undone.`
+    );
+    if (!confirmed) return;
+    try {
+      const res = await api.delete(`/prs/${prToDelete.id}`);
+      if (res.data.success) {
+        if (selectedPR && selectedPR.id === prToDelete.id) {
+          setSelectedPR(null);
+        }
+        fetchPRs();
+      }
+    } catch (err) {
+      console.error('Failed to delete PR:', err);
+    }
+  };
+
   const exportPRsExcel = () => {
     const exportData = prs.map((p) => ({
       'PR Number': p.prNumber,
@@ -485,25 +504,35 @@ export const PRManagement: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 text-slate-600 font-medium">{pr.prPoStatus}</td>
                     <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                      {pr.status === 'Closed' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">
-                          <Lock className="w-3 h-3 text-slate-400" /> Closed
-                        </span>
-                      ) : (
+                      <div className="flex items-center justify-center gap-1.5">
+                        {pr.status === 'Closed' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">
+                            <Lock className="w-3 h-3 text-slate-400" /> Closed
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => handleClosePR(pr, e)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                              (pr.invoices && pr.invoices.length > 0) || (pr.utilizedAmount && pr.utilizedAmount > 0) || pr.invoiceStatus === 'FULLY_INVOICED'
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-500'
+                                : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-500'
+                            }`}
+                            title={(pr.invoices && pr.invoices.length > 0) || (pr.utilizedAmount && pr.utilizedAmount > 0) ? 'Invoices done - Click to Close PR' : 'Click to Close PR'}
+                          >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            <span>Close PR</span>
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={(e) => handleClosePR(pr, e)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs ${
-                            (pr.invoices && pr.invoices.length > 0) || (pr.utilizedAmount && pr.utilizedAmount > 0) || pr.invoiceStatus === 'FULLY_INVOICED'
-                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-500'
-                              : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-500'
-                          }`}
-                          title={(pr.invoices && pr.invoices.length > 0) || (pr.utilizedAmount && pr.utilizedAmount > 0) ? 'Invoices done - Click to Close PR' : 'Click to Close PR'}
+                          onClick={(e) => handleDeletePR(pr, e)}
+                          className="inline-flex items-center justify-center p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors cursor-pointer"
+                          title="Delete PR permanently"
                         >
-                          <CheckCheck className="w-3.5 h-3.5" />
-                          <span>Close PR</span>
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))
