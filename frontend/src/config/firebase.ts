@@ -2,15 +2,15 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getFirestore } from 'firebase/firestore';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
-// Full web app config
+// Firebase web app configuration loaded from environment variables
 const firebaseConfig = {
-  apiKey: 'AIzaSyC3du30zsCt2pclFhNPdV9lD2I_QR7-E3Y',
-  authDomain: 'collegefinance-87409.firebaseapp.com',
-  projectId: 'collegefinance-87409',
-  storageBucket: 'collegefinance-87409.firebasestorage.app',
-  messagingSenderId: '954060858433',
-  appId: '1:954060858433:web:55c1fb92b2ce2612c752c0',
-  measurementId: 'G-CMHJD4EDPZ',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'collegefinance-87409',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || '',
 };
 
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
