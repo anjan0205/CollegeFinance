@@ -64,7 +64,7 @@ const router = Router();
 // Public Authentication Route
 router.post('/auth/login', login);
 
-// ERP Routes (supports authenticated & open access depending on setup)
+// ERP routes apply their own authenticated role policy inside erpRoutes.
 router.use('/erp', erpRoutes);
 
 // Protected Routes (Require Token)

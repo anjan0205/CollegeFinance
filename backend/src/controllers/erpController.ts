@@ -18,6 +18,7 @@ import {
   DebitCreditNote,
   ProjectContainer
 } from '../types/erpTypes';
+import { ERPState, hydrateERPState, persistERPState } from '../services/erpStatePersistence';
 
 // Initial In-Memory Seed State for all 14 modules
 let vendorsStore: Vendor[] = [
@@ -219,10 +220,43 @@ let projectsStore: ProjectContainer[] = [
 // Helper to generate sequential IDs
 const generateNo = (prefix: string, count: number) => `${prefix}/2026/${String(count + 1).padStart(4, '0')}`;
 
+export function getERPState(): ERPState {
+  return {
+    vendors: vendorsStore, items: itemsStore, masterApprovals: masterApprovalsStore,
+    quotations: quotationsStore, prs: prsStore, pos: posStore, grns: grnsStore,
+    inventory: inventoryStore, stockIssues: stockIssuesStore, invoices: invoicesStore,
+    payments: paymentsStore, dcNotes: dcNotesStore, projects: projectsStore
+  };
+}
+
+function applyERPState(state: ERPState): void {
+  vendorsStore = state.vendors || vendorsStore;
+  itemsStore = state.items || itemsStore;
+  masterApprovalsStore = state.masterApprovals || masterApprovalsStore;
+  quotationsStore = state.quotations || quotationsStore;
+  prsStore = state.prs || prsStore;
+  posStore = state.pos || posStore;
+  grnsStore = state.grns || grnsStore;
+  inventoryStore = state.inventory || inventoryStore;
+  stockIssuesStore = state.stockIssues || stockIssuesStore;
+  invoicesStore = state.invoices || invoicesStore;
+  paymentsStore = state.payments || paymentsStore;
+  dcNotesStore = state.dcNotes || dcNotesStore;
+  projectsStore = state.projects || projectsStore;
+}
+
+export const ensureERPStateHydrated = () => hydrateERPState(applyERPState);
+export const saveERPState = (actor: string, action: string) => persistERPState(getERPState(), actor, action);
+
 // 2.1 Master Data Controller
 export const getMasterData = (req: Request, res: Response) => {
+  const type = String(req.query.type || '').toLowerCase();
+  const dataByType: Record<string, any[]> = {
+    vendors: vendorsStore, items: itemsStore, departments: [], costcenters: [], uoms: [], stores: []
+  };
   res.json({
     success: true,
+    data: dataByType[type] || [],
     vendors: vendorsStore,
     items: itemsStore,
     masterApprovals: masterApprovalsStore
@@ -246,15 +280,20 @@ export const createMasterDataRequest = (req: Request, res: Response) => {
 
 // 2.2 Master Data Approval Controller
 export const approveMasterDataChange = (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { status, rejectionReason, approvedBy } = req.body;
+  const id = req.params.id || req.body.id;
+  const action = String(req.body.action || req.body.status || '').toUpperCase();
+  const { rejectionReason, remarks, approvedBy } = req.body;
+  if (!id || (action !== 'APPROVE' && action !== 'REJECT')) {
+    return res.status(400).json({ success: false, message: 'An approval request requires an id and APPROVE or REJECT action.' });
+  }
+  const status: MasterDataChangeRequest['status'] = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   const item = masterApprovalsStore.find((m) => m.id === id);
   if (!item) return res.status(404).json({ success: false, message: 'Request not found' });
 
   item.status = status;
   item.approvedBy = approvedBy || 'Admin User';
   item.approvedAt = new Date().toISOString().split('T')[0];
-  item.rejectionReason = rejectionReason;
+  item.rejectionReason = rejectionReason || remarks;
 
   if (status === 'APPROVED') {
     if (item.entityType === 'VENDORS') {
@@ -269,7 +308,7 @@ export const approveMasterDataChange = (req: Request, res: Response) => {
 
 // 2.3 Quotation Management Controller
 export const getQuotations = (req: Request, res: Response) => {
-  res.json({ success: true, quotations: quotationsStore });
+  res.json({ success: true, data: quotationsStore });
 };
 
 export const createQuotation = (req: Request, res: Response) => {
@@ -301,12 +340,12 @@ export const selectWinningQuotation = (req: Request, res: Response) => {
       q.isWinning = false;
     }
   });
-  res.json({ success: true, message: 'Winning quotation selected' });
+  res.json({ success: true, message: 'Winning quotation selected', data: quotationsStore.find((q) => q.id === id) });
 };
 
 // 2.4 PR Data Controller
 export const getPRs = (req: Request, res: Response) => {
-  res.json({ success: true, prs: prsStore });
+  res.json({ success: true, data: prsStore });
 };
 
 export const createPR = (req: Request, res: Response) => {
@@ -335,7 +374,12 @@ export const createPR = (req: Request, res: Response) => {
 
 export const updatePRStatus = (req: Request, res: Response) => {
   const { id } = req.params;
-  const { status, rejectionReason, approvedBy } = req.body;
+  const action = String(req.body.action || req.body.status || '').toUpperCase();
+  const { rejectionReason, remarks, approvedBy } = req.body;
+  if (action !== 'APPROVE' && action !== 'REJECT') {
+    return res.status(400).json({ success: false, message: 'PR approval requires an APPROVE or REJECT action.' });
+  }
+  const status: 'APPROVED' | 'REJECTED' = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   const pr = prsStore.find((p) => p.id === id);
   if (!pr) return res.status(404).json({ success: false, message: 'PR not found' });
 
@@ -344,15 +388,15 @@ export const updatePRStatus = (req: Request, res: Response) => {
     pr.approvedBy = approvedBy || 'Admin User';
     pr.approvedAt = new Date().toISOString().split('T')[0];
   } else if (status === 'REJECTED') {
-    pr.rejectionReason = rejectionReason;
+    pr.rejectionReason = rejectionReason || remarks;
   }
-  pr.history.push({ timestamp: new Date().toLocaleString(), action: `Status changed to ${status}`, user: approvedBy || 'User', remarks: rejectionReason });
+  pr.history.push({ timestamp: new Date().toLocaleString(), action: `Status changed to ${status}`, user: approvedBy || 'User', remarks: rejectionReason || remarks });
   res.json({ success: true, data: pr });
 };
 
 // 2.5 PO Data Controller
 export const getPOs = (req: Request, res: Response) => {
-  res.json({ success: true, pos: posStore });
+  res.json({ success: true, data: posStore });
 };
 
 export const createPO = (req: Request, res: Response) => {
@@ -398,7 +442,7 @@ export const createPO = (req: Request, res: Response) => {
 
 // 2.6 GRN Data Controller
 export const getGRNs = (req: Request, res: Response) => {
-  res.json({ success: true, grns: grnsStore });
+  res.json({ success: true, data: grnsStore });
 };
 
 export const createGRN = (req: Request, res: Response) => {
@@ -435,12 +479,12 @@ export const createGRN = (req: Request, res: Response) => {
 
 // 2.7 Inventory Register Controller
 export const getInventory = (req: Request, res: Response) => {
-  res.json({ success: true, inventory: inventoryStore });
+  res.json({ success: true, data: inventoryStore });
 };
 
 // 2.8 Stock Issue Controller
 export const getStockIssues = (req: Request, res: Response) => {
-  res.json({ success: true, issues: stockIssuesStore });
+  res.json({ success: true, data: stockIssuesStore });
 };
 
 export const createStockIssue = (req: Request, res: Response) => {
@@ -478,7 +522,7 @@ export const createStockIssue = (req: Request, res: Response) => {
 
 // 2.9 Invoice Data Controller
 export const getInvoices = (req: Request, res: Response) => {
-  res.json({ success: true, invoices: invoicesStore });
+  res.json({ success: true, data: invoicesStore });
 };
 
 export const createInvoice = (req: Request, res: Response) => {
@@ -516,12 +560,17 @@ export const createInvoice = (req: Request, res: Response) => {
 
 // 2.10 & 2.11 Invoice Payments & Part Payment Controller
 export const getPayments = (req: Request, res: Response) => {
-  res.json({ success: true, payments: paymentsStore });
+  res.json({ success: true, data: paymentsStore });
 };
 
 export const createPayment = (req: Request, res: Response) => {
   const { invoiceId, amountPaid, paymentMode, txnReference, isAdvance, notes } = req.body;
   const inv = invoicesStore.find((i) => i.id === invoiceId);
+  const requestedAmount = Number(amountPaid);
+  if (!invoiceId || !inv) return res.status(404).json({ success: false, message: 'A valid invoice is required for payment.' });
+  if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) return res.status(400).json({ success: false, message: 'Payment amount must be greater than zero.' });
+  if (requestedAmount > inv.balanceOutstanding) return res.status(400).json({ success: false, message: 'Payment amount exceeds the outstanding invoice balance.' });
+  if (!['APPROVED_FOR_PAYMENT', 'PARTIALLY_PAID'].includes(inv.status)) return res.status(409).json({ success: false, message: 'Invoice is not approved for payment.' });
 
   const newPay: InvoicePayment = {
     id: `PAY-${Date.now()}`,
@@ -531,7 +580,7 @@ export const createPayment = (req: Request, res: Response) => {
     vendorInvNo: inv?.vendorInvNo || 'TL-INV-9921',
     vendorName: inv?.vendorName || 'TechLab Supplies Pvt Ltd',
     paymentDate: new Date().toISOString().split('T')[0],
-    amountPaid: Number(amountPaid) || 50000,
+    amountPaid: requestedAmount,
     paymentMode: paymentMode || 'NEFT_RTGS',
     txnReference: txnReference || 'NEFT-409182901',
     isAdvance: Boolean(isAdvance),
@@ -552,7 +601,7 @@ export const createPayment = (req: Request, res: Response) => {
 
 // 2.12 D/C Note Controller
 export const getDCNotes = (req: Request, res: Response) => {
-  res.json({ success: true, dcNotes: dcNotesStore });
+  res.json({ success: true, data: dcNotesStore });
 };
 
 export const createDCNote = (req: Request, res: Response) => {
@@ -578,7 +627,7 @@ export const createDCNote = (req: Request, res: Response) => {
 
 // 2.13 Project Management Controller
 export const getProjects = (req: Request, res: Response) => {
-  res.json({ success: true, projects: projectsStore });
+  res.json({ success: true, data: projectsStore });
 };
 
 export const createProject = (req: Request, res: Response) => {
@@ -609,6 +658,16 @@ export const getERPReports = (req: Request, res: Response) => {
 
   res.json({
     success: true,
+    data: {
+      totalPRs: prsStore.length,
+      totalPOs: posStore.length,
+      totalGRNs: grnsStore.length,
+      totalInvoices: invoicesStore.length,
+      pendingApprovalsCount: prsStore.filter((p) => p.status === 'PENDING_APPROVAL').length + masterApprovalsStore.filter((m) => m.status === 'PENDING').length,
+      totalInventoryValue: stockValuation,
+      activeProjectsCount: projectsStore.filter((p) => p.status === 'ACTIVE').length,
+      totalPaymentsProcessed: totalPaid
+    },
     summary: {
       totalAllocated,
       totalCommitted,

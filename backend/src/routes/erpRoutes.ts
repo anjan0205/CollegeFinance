@@ -2,20 +2,46 @@ import { Router } from 'express';
 import * as erpController from '../controllers/erpController';
 import * as rfqController from '../controllers/rfqController';
 import { ApprovalEngine } from '../services/approvalEngine';
+import { authenticateToken, authorizeRoles, AuthenticatedRequest } from '../middleware/auth';
+import { ensureERPStateHydrated, saveERPState } from '../controllers/erpController';
+import { RequestHandler } from 'express';
 
 const router = Router();
 
+router.use(authenticateToken);
+router.use(async (_req, _res, next) => {
+  try {
+    await ensureERPStateHydrated();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Persist only after a controller has produced a successful JSON result. */
+const persistMutation = (action: string, handler: RequestHandler): RequestHandler => (req: AuthenticatedRequest, res, next) => {
+  const sendJson = res.json.bind(res);
+  res.json = ((body: any) => {
+    if (!body?.success || res.statusCode >= 400) return sendJson(body);
+    saveERPState(req.user?.email || 'system', action)
+      .then(() => sendJson(body))
+      .catch(next);
+    return res;
+  }) as typeof res.json;
+  handler(req, res, next);
+};
+
 // Master Data
 router.get('/master', erpController.getMasterData);
-router.post('/master', erpController.createMasterData);
+router.post('/master', authorizeRoles('ADMIN', 'FINANCE', 'HOD', 'DEPARTMENT_USER'), persistMutation('ERP_MASTER_SUBMITTED', erpController.createMasterData));
 router.get('/master/approvals', erpController.getPendingMasterApprovals);
-router.post('/master/approve', erpController.approveMasterData);
+router.post('/master/approve', authorizeRoles('ADMIN', 'FINANCE', 'PRINCIPAL', 'CEO'), persistMutation('ERP_MASTER_DECIDED', erpController.approveMasterData));
 
 // Approval Matrix Engine
 router.get('/approval-matrix', (req, res) => {
   res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
 });
-router.post('/approval-matrix', (req, res) => {
+router.post('/approval-matrix', authorizeRoles('ADMIN'), (req, res) => {
   const { rules } = req.body;
   if (rules && Array.isArray(rules)) {
     ApprovalEngine.updateMatrixRules(rules);
@@ -27,57 +53,57 @@ router.post('/approval-matrix', (req, res) => {
 // RFQs (Request for Quotations)
 router.get('/rfqs', rfqController.getRFQs);
 router.get('/rfqs/:id', rfqController.getRFQById);
-router.post('/rfqs', rfqController.createRFQ);
-router.post('/rfqs/quote', rfqController.submitQuote);
-router.post('/rfqs/select-vendor', rfqController.selectWinningQuote);
+router.post('/rfqs', authorizeRoles('ADMIN', 'FINANCE', 'HOD'), rfqController.createRFQ);
+router.post('/rfqs/quote', authorizeRoles('ADMIN', 'FINANCE'), rfqController.submitQuote);
+router.post('/rfqs/select-vendor', authorizeRoles('ADMIN', 'FINANCE'), rfqController.selectWinningQuote);
 
 // Quotations
 router.get('/quotations', erpController.getQuotations);
-router.post('/quotations', erpController.createQuotation);
-router.post('/quotations/:id/select-winner', erpController.selectWinningQuotation);
+router.post('/quotations', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_QUOTATION_CREATED', erpController.createQuotation));
+router.post('/quotations/:id/select-winner', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_QUOTATION_SELECTED', erpController.selectWinningQuotation));
 
 // Purchase Requisitions (PR)
 router.get('/prs', erpController.getPRs);
-router.post('/prs', erpController.createPR);
-router.post('/prs/:id/approve', erpController.approvePR);
+router.post('/prs', authorizeRoles('ADMIN', 'HOD', 'DEPARTMENT_USER'), persistMutation('ERP_PR_CREATED', erpController.createPR));
+router.post('/prs/:id/approve', authorizeRoles('ADMIN', 'FINANCE', 'HOD', 'PRINCIPAL', 'CEO'), persistMutation('ERP_PR_DECIDED', erpController.approvePR));
 
 // Purchase Orders (PO)
 router.get('/pos', erpController.getPOs);
-router.post('/pos', erpController.createPO);
-router.post('/pos/:id/approve', erpController.approvePO);
+router.post('/pos', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_PO_CREATED', erpController.createPO));
+router.post('/pos/:id/approve', authorizeRoles('ADMIN', 'FINANCE', 'PRINCIPAL', 'CEO'), persistMutation('ERP_PO_APPROVED', erpController.approvePO));
 
 // Goods Receipt Notes (GRN)
 router.get('/grns', erpController.getGRNs);
-router.post('/grns', erpController.createGRN);
-router.post('/grns/:id/verify', erpController.verifyGRN);
+router.post('/grns', authorizeRoles('ADMIN', 'STORE'), persistMutation('ERP_GRN_CREATED', erpController.createGRN));
+router.post('/grns/:id/verify', authorizeRoles('ADMIN', 'STORE', 'FINANCE'), persistMutation('ERP_GRN_VERIFIED', erpController.verifyGRN));
 
 // Inventory
 router.get('/inventory', erpController.getInventory);
 
 // Stock Issue
 router.get('/stock-issues', erpController.getStockIssues);
-router.post('/stock-issues', erpController.createStockIssue);
+router.post('/stock-issues', authorizeRoles('ADMIN', 'STORE'), persistMutation('ERP_STOCK_ISSUED', erpController.createStockIssue));
 
 // Invoices
 router.get('/invoices', erpController.getInvoices);
-router.post('/invoices', erpController.createInvoice);
-router.post('/invoices/:id/verify', erpController.verifyInvoice);
+router.post('/invoices', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_INVOICE_CREATED', erpController.createInvoice));
+router.post('/invoices/:id/verify', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_INVOICE_VERIFIED', erpController.verifyInvoice));
 
 // Invoice Payments
 router.get('/payments', erpController.getPayments);
-router.post('/payments', erpController.createPayment);
+router.post('/payments', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_PAYMENT_PROCESSED', erpController.createPayment));
 
 // Part Payments
 router.get('/part-payments', erpController.getPartPayments);
-router.post('/part-payments', erpController.createPartPayment);
+router.post('/part-payments', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_PART_PAYMENT_CREATED', erpController.createPartPayment));
 
 // Debit / Credit Notes
 router.get('/dc-notes', erpController.getDCNotes);
-router.post('/dc-notes', erpController.createDCNote);
+router.post('/dc-notes', authorizeRoles('ADMIN', 'FINANCE'), persistMutation('ERP_DC_NOTE_CREATED', erpController.createDCNote));
 
 // Projects
 router.get('/projects', erpController.getProjects);
-router.post('/projects', erpController.createProject);
+router.post('/projects', authorizeRoles('ADMIN', 'FINANCE', 'HOD'), persistMutation('ERP_PROJECT_CREATED', erpController.createProject));
 
 // Summary & Aggregated Metrics
 router.get('/summary', erpController.getERPSummary);

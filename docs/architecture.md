@@ -1,8 +1,8 @@
 # System Architecture Documentation: VIIT College Budget & ERP Platform 🗺️
 
-> **Version:** 1.0.0  
+> **Version:** 1.1.1
 > **Target Institution:** Vignan's Institute of Information Technology (VIIT)  
-> **Last Updated:** September 2026  
+> **Last Updated:** October 5, 2026
 
 ---
 
@@ -128,9 +128,9 @@ sequenceDiagram
   - **`components/Navbar.tsx`**: Global search box (queries the `/search` engine endpoint across PRs, POs, vendors, invoices) and a notification bell surfacing pending PR approvals and flagged budget allocations.
 
 - **`services/`**:
-  - **`api.ts`**: Axios instance configured with base URLs and authorization header interceptors. On non-localhost hosts it overrides the adapter so every call is served by the in-browser Firebase Client Engine.
-  - **`erpService.ts`**: Unified client-side business service managing ERP data, fallbacks, and transactional state. Uses `pickList()` so a legitimately empty API array is honored and seed data is used only on a thrown error.
-  - **`firebaseClientService.ts`**: Production "backend" (`handleClientRequest`). Serves auth, budget, PR, invoice, dashboard, reports, user, and the full `/erp/*` Procure-to-Pay suite plus `/search`, backed by Firestore collections seeded on first use from `data/erpSeedData.ts`.
+  - **`api.ts`**: Axios instance configured with the deployed Express API URL and JWT authorization header injection. API failures propagate to the caller rather than being converted into browser-side writes.
+  - **`erpService.ts`**: Typed ERP transport facade for the authenticated `/api/erp/*` contract. It accepts only the standard `{ success, data }` envelope and has no mock-write fallback.
+  - **`firebaseClientService.ts`**: Legacy Firestore client utility retained for migration support; it is not used as the ERP transaction authority by `api.ts`.
   - **`auditService.ts`**: Append-only audit trail writer/reader (`logAudit`, `fetchAuditLogs`) over the Firestore `auditLogs` collection. Fire-and-forget; never throws so it cannot break the action it records. Implements §5.3.
   - **`approvalEmailService.ts`**: Handles tokenized email generation, 2-tier approval state transitions, and admin alert dispatch.
 
@@ -225,11 +225,11 @@ stamped (`stampCreate`) with the common envelope:
   history: { by, action, at, note? }[], approvedBy?, approvedAt?, rejectionReason? }
 ```
 
-**Server-side logic mapping (target §9):** the target recommends Cloud Functions
-for status transitions and multi-doc atomic writes. This deployment has no paid
-backend — the in-browser **Firebase Client Engine** (`firebaseClientService.ts`)
-is the "equivalent server-side logic" and hosts `transitionStatus`, id/number
-generation, seeding, and audit writes.
+**Server-side logic mapping (target §9):** Express is the transaction authority
+for `/api/erp/*`. In local fallback mode it hydrates and persists the ERP
+aggregate using SQLite; mutations are audited before the success response is
+returned. Firebase remains an integration/migration dependency, not an
+authorization substitute.
 
 ---
 
@@ -237,15 +237,18 @@ generation, seeding, and audit writes.
 
 ### 5.1 Security Model & RBAC
 - **Role Isolation**: Granular permissions enforced across roles (`ADMIN`, `FINANCE`, `HOD`, `DEPARTMENT_USER`, `PRINCIPAL`, `CEO`, `STORE`), centralized in [`frontend/src/config/permissions.ts`](file:///d:/College-main/frontend/src/config/permissions.ts). Menu items are hidden per role in `Sidebar.tsx`, and `DashboardLayout.tsx` guards direct-URL access — an unauthorized route redirects to `/403`.
+- **ERP API Enforcement**: All `/api/erp/*` endpoints require a verified JWT. The API enforces mutation-specific roles: department users/HODs can submit PRs and master requests; Finance/Admin manages financial documents; Store manages GRN and stock issue; executive roles decide authorized approvals. UI visibility is not treated as authorization.
 - **Tokenized One-Click Approval Links**: Direct email links use cryptographic tokens verifying identity and preventing unauthorized modification.
 - **Input Sanitization**: Defense against XSS and injection when parsing uploaded Excel datasets and rendering document previews.
 
 ### 5.2 Error Handling & Resilience
 - **Multi-Level Storage Fallback**: Automatic failover between Direct Firebase Firestore, PostgreSQL, and local SQLite.
 - **Comprehensive UX Error States**: Dedicated standalone pages for `404 Not Found`, `403 Forbidden`, `500 Server Error`, `Session Expired`, `Offline Detection`, and `Maintenance Mode`.
+- **SPA Refresh Fallback**: When Express serves the local Vite production build, it returns `frontend/dist/index.html` for HTML navigation requests that do not match a static file. This allows React `BrowserRouter` to resolve deep links after a direct load or page refresh, while `/api/*`, `/health`, and missing non-HTML assets retain their normal server responses.
 
 ### 5.3 Audit Trails
 - All financial allocations, budget transfers, purchase orders, and master approvals append immutable timestamped audit entries logging the actor, channel (`EMAIL` vs `PORTAL`), and decision rationale.
+- **ERP durability**: The local SQLite backend persists the ERP document aggregate in `ERP_STATE` and writes a corresponding `AUDIT_LOGS` event only after a successful ERP mutation. The controller hydrates this state before serving `/api/erp/*`, so submitted PRs, purchase documents, inventory effects, invoices, and payments survive backend restarts in local fallback mode.
 
 ### 5.4 Performance & CDN Optimization Architecture
 - **Firebase Hosting Global Edge Caching**: Configured in `firebase.json` with immutable 1-year caching (`Cache-Control: public, max-age=31536000, immutable`) for hashed `/assets/**` chunks and 30-day stale-while-revalidate for static media, while keeping `/index.html` strictly un-cached for instantaneous deployment updates.

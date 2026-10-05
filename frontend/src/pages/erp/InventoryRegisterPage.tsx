@@ -1,18 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { Layers, Search, AlertCircle, Warehouse, TrendingUp } from 'lucide-react';
-import { erpService } from '../../services/erpService';
+import { erpService, getERPErrorMessage } from '../../services/erpService';
 import { InventoryItem } from '../../types/erpTypes';
 
 export const InventoryRegisterPage: React.FC = () => {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
   const loadData = async () => {
     setLoading(true);
-    const res = await erpService.getInventory();
-    setInventory(res);
-    setLoading(false);
+    setError(null);
+    try {
+      setInventory(await erpService.getInventory());
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -63,6 +69,7 @@ export const InventoryRegisterPage: React.FC = () => {
       </div>
 
       {/* Stock Cards Grid */}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">{error}</div>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {loading ? (
           <div className="col-span-2 p-12 text-center text-gray-500">Loading stock inventory...</div>

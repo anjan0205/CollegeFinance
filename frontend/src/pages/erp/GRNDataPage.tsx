@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { PackageCheck, Plus, Search, Printer, CheckCircle2, ShieldAlert } from 'lucide-react';
-import { erpService } from '../../services/erpService';
+import { erpService, getERPErrorMessage } from '../../services/erpService';
 import { GRNRecord } from '../../types/erpTypes';
 import { PrintableDocumentModal } from '../../components/erp/PrintableDocumentModal';
 
 export const GRNDataPage: React.FC = () => {
   const [grns, setGrns] = useState<GRNRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGRNForPrint, setSelectedGRNForPrint] = useState<GRNRecord | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -16,14 +18,19 @@ export const GRNDataPage: React.FC = () => {
     storeName: 'IT Infrastructure Store Room',
     receivedBy: 'P. Verma',
     inspectionStatus: 'PASSED',
-    items: [{ itemName: 'Epson High-Lumen Laser Projector', qtyReceived: 2, qtyAccepted: 2, qtyRejected: 0 }]
+    items: [{ itemId: 'I-201', itemName: 'High-End Workstation Computer (i9, 64GB RAM)', qtyReceived: 2, qtyAccepted: 2, qtyRejected: 0 }]
   });
 
   const loadData = async () => {
     setLoading(true);
-    const res = await erpService.getGRNs();
-    setGrns(res);
-    setLoading(false);
+    setError(null);
+    try {
+      setGrns(await erpService.getGRNs());
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -32,9 +39,17 @@ export const GRNDataPage: React.FC = () => {
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await erpService.createGRN(formData);
-    setShowAddModal(false);
-    loadData();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await erpService.createGRN(formData);
+      setShowAddModal(false);
+      await loadData();
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredGRNs = grns.filter(grn =>
@@ -79,6 +94,7 @@ export const GRNDataPage: React.FC = () => {
       </div>
 
       {/* Table */}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">{error}</div>}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-gray-500">Loading GRN records...</div>
@@ -203,16 +219,17 @@ export const GRNDataPage: React.FC = () => {
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => { setShowAddModal(false); setError(null); }}
                   className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 text-white rounded-xl font-bold"
                 >
-                  Submit & Post to Inventory
+                  {isSubmitting ? 'Posting GRN…' : 'Submit & Post to Inventory'}
                 </button>
               </div>
             </form>

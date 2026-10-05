@@ -109,9 +109,25 @@ app.get('/health', (req: Request, res: Response) => {
 
 // Serve frontend static build files (Unified local dev server only)
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
-if (!process.env.CF_PAGES && !process.env.CLOUDFLARE_WORKER && fs.existsSync(frontendDistPath)) {
+const shouldServeFrontend = !process.env.CF_PAGES && !process.env.CLOUDFLARE_WORKER && fs.existsSync(frontendDistPath);
+if (shouldServeFrontend) {
   console.log(`[Static Server] Serving frontend build from ${frontendDistPath}`);
   app.use(express.static(frontendDistPath));
+
+  // BrowserRouter routes (for example, /prs/all) are client-side routes.
+  // On a direct load or refresh, return the SPA entry point only for HTML
+  // navigation requests so React Router can resolve the requested route.
+  app.get('*', (req: Request, res: Response, next: NextFunction) => {
+    if (!req.accepts('html')) {
+      return next();
+    }
+
+    res.sendFile(path.join(frontendDistPath, 'index.html'), (err) => {
+      if (err) {
+        next(err);
+      }
+    });
+  });
 }
 
 // Centralized Error Handler

@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { CreditCard, Plus, Search, CheckCircle2 } from 'lucide-react';
-import { erpService } from '../../services/erpService';
+import { erpService, getERPErrorMessage } from '../../services/erpService';
 import { PaymentRecord } from '../../types/erpTypes';
 
 export const InvoicePaymentsPage: React.FC = () => {
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [formData, setFormData] = useState<any>({
@@ -18,9 +20,14 @@ export const InvoicePaymentsPage: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    const res = await erpService.getPayments();
-    setPayments(res);
-    setLoading(false);
+    setError(null);
+    try {
+      setPayments(await erpService.getPayments());
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -29,9 +36,17 @@ export const InvoicePaymentsPage: React.FC = () => {
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await erpService.createPayment(formData);
-    setShowAddModal(false);
-    loadData();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await erpService.createPayment(formData);
+      setShowAddModal(false);
+      await loadData();
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredPayments = payments.filter(pay =>
@@ -76,6 +91,7 @@ export const InvoicePaymentsPage: React.FC = () => {
       </div>
 
       {/* Table */}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">{error}</div>}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-gray-500">Loading payment disbursements...</div>
@@ -174,16 +190,17 @@ export const InvoicePaymentsPage: React.FC = () => {
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => { setShowAddModal(false); setError(null); }}
                   className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 text-white rounded-xl font-bold"
                 >
-                  Confirm Payment Release
+                  {isSubmitting ? 'Releasing Payment…' : 'Confirm Payment Release'}
                 </button>
               </div>
             </form>

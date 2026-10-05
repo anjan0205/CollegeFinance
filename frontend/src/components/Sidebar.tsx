@@ -40,7 +40,7 @@ export const Sidebar: React.FC = () => {
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen sticky top-0 border-r border-slate-800 flex-shrink-0 select-none shadow-xl z-20">
       {/* Brand Header */}
       <div className="h-16 px-5 flex items-center gap-3 border-b border-slate-800 bg-slate-950/60">
-        <div className="w-10 h-10 rounded-lg p-1 bg-white flex items-center justify-center shadow-md shadow-brand-500/20">
+        <div className="w-10 h-10 flex items-center justify-center drop-shadow-[0_2px_8px_rgba(59,130,246,0.35)]">
           <img src="/logo.png" alt="VIIT Logo" className="w-full h-full object-contain" />
         </div>
         <div>

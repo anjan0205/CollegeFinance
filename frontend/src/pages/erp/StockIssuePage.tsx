@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowUpRight, Plus, Search, Printer, CheckCircle2 } from 'lucide-react';
-import { erpService } from '../../services/erpService';
+import { erpService, getERPErrorMessage } from '../../services/erpService';
 import { StockIssueRecord } from '../../types/erpTypes';
 import { PrintableDocumentModal } from '../../components/erp/PrintableDocumentModal';
 
 export const StockIssuePage: React.FC = () => {
   const [issues, setIssues] = useState<StockIssueRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIssueForPrint, setSelectedIssueForPrint] = useState<StockIssueRecord | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -15,14 +17,19 @@ export const StockIssuePage: React.FC = () => {
     issuedTo: 'Dr. A. B. Patil',
     storeLocation: 'IT Infrastructure Store Room',
     purpose: 'Lab Setup Requirement',
-    items: [{ itemId: 'ITEM-001', itemName: 'Epson High-Lumen Laser Projector', qtyIssued: 1 }]
+    items: [{ itemId: 'I-201', itemName: 'High-End Workstation Computer (i9, 64GB RAM)', qtyIssued: 1 }]
   });
 
   const loadData = async () => {
     setLoading(true);
-    const res = await erpService.getStockIssues();
-    setIssues(res);
-    setLoading(false);
+    setError(null);
+    try {
+      setIssues(await erpService.getStockIssues());
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -31,9 +38,17 @@ export const StockIssuePage: React.FC = () => {
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await erpService.createStockIssue(formData);
-    setShowAddModal(false);
-    loadData();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await erpService.createStockIssue(formData);
+      setShowAddModal(false);
+      await loadData();
+    } catch (err) {
+      setError(getERPErrorMessage(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredIssues = issues.filter(iss =>
@@ -78,6 +93,7 @@ export const StockIssuePage: React.FC = () => {
       </div>
 
       {/* Table */}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">{error}</div>}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-gray-500">Loading stock issue vouchers...</div>
@@ -211,16 +227,17 @@ export const StockIssuePage: React.FC = () => {
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => { setShowAddModal(false); setError(null); }}
                   className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 text-white rounded-xl font-bold"
                 >
-                  Issue Stock & Deduct Balance
+                  {isSubmitting ? 'Issuing Stock…' : 'Issue Stock & Deduct Balance'}
                 </button>
               </div>
             </form>

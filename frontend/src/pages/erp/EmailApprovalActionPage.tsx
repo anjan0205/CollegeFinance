@@ -55,7 +55,7 @@ export const EmailApprovalActionPage: React.FC = () => {
 
       {/* Brand Header */}
       <div className="sm:mx-auto sm:w-full sm:max-w-md z-10 text-center mb-6">
-        <div className="w-16 h-16 rounded-2xl p-2 bg-white flex items-center justify-center shadow-xl shadow-brand-500/20 mx-auto mb-3">
+        <div className="w-20 h-20 flex items-center justify-center drop-shadow-[0_4px_16px_rgba(59,130,246,0.35)] mx-auto mb-3">
           <img src="/logo.png" alt="VIIT Logo" className="w-full h-full object-contain" />
         </div>
         <h2 className="text-2xl font-black text-white tracking-tight">

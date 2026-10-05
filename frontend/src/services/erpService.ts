@@ -1,355 +1,240 @@
 import api from './api';
 import {
-  QuotationRecord, PRRecord, PORecord, GRNRecord, InventoryItem, StockIssueRecord,
-  InvoiceRecord, PaymentRecord, PartPaymentRecord, DCNoteRecord, ProjectRecord, ERPSummaryMetrics
+  DCNoteRecord,
+  ERPSummaryMetrics,
+  GRNRecord,
+  InventoryItem,
+  InvoiceRecord,
+  PaymentRecord,
+  ProjectRecord,
+  StockIssueRecord
 } from '../types/erpTypes';
-import {
-  SEED_MASTERS, SEED_QUOTATIONS, SEED_POS, SEED_GRNS, SEED_INVENTORY, SEED_STOCK_ISSUES,
-  SEED_INVOICES, SEED_PAYMENTS, SEED_PART_PAYMENTS, SEED_DC_NOTES, SEED_PROJECTS
-} from '../data/erpSeedData';
 
-// Mutable offline copies. These are ONLY used when a request throws (e.g. the
-// localhost backend is down and the production client engine is not active).
-// In production every /erp/* call is served by the Firebase client engine, which
-// returns real, Firestore-persisted arrays — so these are pure safety nets.
-const MOCK_MASTERS: Record<string, any[]> = {
-  vendors: [...SEED_MASTERS.vendors],
-  items: [...SEED_MASTERS.items],
-  departments: [...SEED_MASTERS.departments],
-  costCenters: [...SEED_MASTERS.costCenters],
-  uoms: [...SEED_MASTERS.uoms],
-  stores: [...SEED_MASTERS.stores]
-};
-const MOCK_QUOTATIONS: QuotationRecord[] = [...SEED_QUOTATIONS];
-const MOCK_POS: PORecord[] = [...SEED_POS];
-const MOCK_GRNS: GRNRecord[] = [...SEED_GRNS];
-const MOCK_INVENTORY: InventoryItem[] = [...SEED_INVENTORY];
-const MOCK_STOCK_ISSUES: StockIssueRecord[] = [...SEED_STOCK_ISSUES];
-const MOCK_INVOICES: InvoiceRecord[] = [...SEED_INVOICES];
-const MOCK_PAYMENTS: PaymentRecord[] = [...SEED_PAYMENTS];
-const MOCK_PART_PAYMENTS: PartPaymentRecord[] = [...SEED_PART_PAYMENTS];
-const MOCK_DC_NOTES: DCNoteRecord[] = [...SEED_DC_NOTES];
-const MOCK_PROJECTS: ProjectRecord[] = [...SEED_PROJECTS];
+type ApiRecord = Record<string, any>;
 
-const MOCK_PRS: PRRecord[] = [
-  { id: 'PR-1', prNumber: 'PR/2026/0001', department: 'Computer Science & Engineering', budgetHead: 'BH-2026-CSE', requesterName: 'Dr. A. B. Patil', purpose: 'Smart Classroom AV Upgrade for Lab 4', totalAmount: 180000, priority: 'HIGH', status: 'APPROVED', createdAt: '2026-02-10', items: [{ itemId: 'ITEM-001', itemName: 'Epson High-Lumen Laser Projector', qty: 4, estimatedUnitPrice: 45000, uom: 'NOS', totalEstimate: 180000 }] },
-  { id: 'PR-2', prNumber: 'PR/2026/0002', department: 'Electronics & Comm Engineering', budgetHead: 'BH-2026-ECE', requesterName: 'Dr. V. S. Kulkarni', purpose: 'VLSI Research Oscilloscopes Procurement', totalAmount: 96000, priority: 'MEDIUM', status: 'PENDING_HOD', createdAt: '2026-02-18', items: [{ itemId: 'ITEM-002', itemName: 'Digital Storage Oscilloscope 100MHz', qty: 3, estimatedUnitPrice: 32000, uom: 'NOS', totalEstimate: 96000 }] }
-];
-
-// Use the API array whenever the response is well-formed (even if empty — an
-// empty list is a legitimate answer). Fall back to seed data only on a genuine
-// error or malformed payload.
-function pickList<T>(data: any, fallback: T[]): T[] {
-  return Array.isArray(data) ? (data as T[]) : fallback;
+function requireData<T>(data: unknown): T {
+  if (data === undefined || data === null) throw new Error('ERP API returned no data.');
+  return data as T;
 }
 
+function list<T>(path: string): Promise<T[]> {
+  return api.get(path).then((res) => {
+    if (!Array.isArray(res.data?.data)) throw new Error(`ERP API returned an invalid list for ${path}.`);
+    return res.data.data as T[];
+  });
+}
+
+function create<T>(path: string, data: unknown): Promise<T> {
+  return api.post(path, data).then((res) => requireData<T>(res.data?.data));
+}
+
+/** Convert API failures into safe, actionable messages for ERP workflow pages. */
+export function getERPErrorMessage(error: unknown): string {
+  const responseMessage = (error as any)?.response?.data?.message;
+  const message = responseMessage || (error instanceof Error ? error.message : undefined);
+  return typeof message === 'string' && message.trim()
+    ? message
+    : 'Unable to complete the ERP request. Please try again.';
+}
+
+// The Express domain model deliberately uses canonical accounting names (for
+// example, `currentStock` and `internalInvNo`). These mappers preserve that API
+// contract while supplying the display model used by the existing ERP screens.
+const mapGRN = (record: ApiRecord): GRNRecord => ({
+  id: String(record.id),
+  grnNumber: record.grnNo,
+  poNumber: record.poNo,
+  vendorName: record.vendorName,
+  storeName: record.storeName,
+  challanNumber: record.challanNumber,
+  receivedDate: record.dateReceived,
+  receivedBy: record.receivedBy,
+  inspectionStatus: record.isDiscrepancyFlagged ? 'FAILED_REJECTED' : 'PASSED',
+  status: record.status === 'DRAFT' ? 'DRAFT' : 'VERIFIED',
+  items: (record.items || []).map((item: ApiRecord) => ({
+    itemId: String(item.itemId),
+    itemName: String(item.itemName),
+    qtyReceived: Number(item.qtyReceived || 0),
+    qtyAccepted: Number(item.qtyAccepted || 0),
+    qtyRejected: Number(item.qtyRejected || 0),
+    remarks: item.remarks || item.rejectionReason
+  })),
+  remarks: record.remarks
+});
+
+const mapInventory = (record: ApiRecord): InventoryItem => ({
+  id: String(record.id),
+  itemCode: String(record.itemCode),
+  itemName: String(record.itemName),
+  category: String(record.category),
+  uom: String(record.uom),
+  storeLocation: record.storeName,
+  availableQty: Number(record.currentStock || 0),
+  allocatedQty: Number(record.issuedQty || 0),
+  totalValue: Number(record.totalValuation || 0),
+  reorderLevel: Number(record.reorderLevel || 0),
+  lastReceivedDate: record.lastReceivedDate || ''
+});
+
+const mapStockIssue = (record: ApiRecord): StockIssueRecord => ({
+  id: String(record.id),
+  issueNumber: record.issueNo,
+  department: record.departmentName,
+  issuedTo: record.requestedBy,
+  storeLocation: record.storeName,
+  issueDate: record.date,
+  purpose: record.purpose,
+  status: record.status === 'ISSUED' ? 'ISSUED' : 'PENDING',
+  items: (record.items || []).map((item: ApiRecord) => ({
+    itemId: String(item.itemId),
+    itemName: String(item.itemName),
+    qtyIssued: Number(item.qtyIssued || 0)
+  }))
+});
+
+const mapInvoice = (record: ApiRecord): InvoiceRecord => ({
+  id: String(record.id),
+  invoiceNumber: record.internalInvNo,
+  vendorInvoiceNo: record.vendorInvNo,
+  poNumber: record.poNo,
+  grnNumber: record.grnNo || '—',
+  vendorName: record.vendorName,
+  invoiceDate: record.invoiceDate,
+  dueDate: record.dueDate,
+  amount: record.subtotal,
+  taxAmount: Number(record.taxAmount || 0),
+  totalAmount: Number(record.netPayable || 0),
+  matched3Way: record.threeWayMatchPassed,
+  status: record.status === 'PAID'
+    ? 'FULLY_PAID'
+    : record.status === 'PARTIALLY_PAID'
+      ? 'PARTIALLY_PAID'
+      : record.status === 'DISPUTED'
+        ? 'REJECTED'
+        : record.status === 'APPROVED_FOR_PAYMENT'
+          ? 'APPROVED'
+          : 'PENDING_APPROVAL',
+  items: (record.items || []).map((item: ApiRecord) => ({
+    description: item.itemName,
+    qty: item.qty,
+    unitPrice: item.unitPrice,
+    total: item.amount
+  }))
+});
+
+const mapPayment = (record: ApiRecord): PaymentRecord => ({
+  id: String(record.id),
+  paymentNumber: record.paymentNo,
+  invoiceNumber: record.internalInvNo,
+  vendorName: record.vendorName,
+  paymentDate: record.paymentDate,
+  paymentMode: record.paymentMode,
+  referenceNumber: record.txnReference,
+  amountPaid: Number(record.amountPaid || 0),
+  status: record.status === 'PROCESSED' ? 'PROCESSED' : 'PENDING',
+  remarks: record.notes
+});
+
+const mapDCNote = (record: ApiRecord): DCNoteRecord => ({
+  id: String(record.id),
+  noteNumber: record.noteNo,
+  type: record.type === 'DEBIT' ? 'DEBIT_NOTE' : 'CREDIT_NOTE',
+  referenceDocType: record.linkedInvoiceNo ? 'INVOICE' : 'GRN',
+  referenceDocNumber: record.linkedInvoiceNo || record.linkedGrnNo || '—',
+  vendorName: record.vendorName,
+  reason: record.reason,
+  amount: record.adjustedAmount,
+  noteDate: record.date,
+  status: record.status === 'DRAFT' ? 'DRAFT' : 'APPROVED'
+});
+
+const mapProject = (record: ApiRecord): ProjectRecord => ({
+  id: String(record.id),
+  code: record.code,
+  name: record.name,
+  department: record.departmentName,
+  projectManager: record.manager,
+  budgetAllocated: Number(record.totalBudget || 0),
+  committedAmount: Number(record.committedSpend || 0),
+  actualSpent: Number(record.actualSpend || 0),
+  startDate: record.startDate,
+  endDate: record.endDate,
+  status: record.status === 'PLANNING' ? 'PLANNED' : record.status
+});
+
+/**
+ * ERP API client. There are intentionally no client-side write fallbacks: a
+ * caller only receives a success result after the authenticated backend has
+ * accepted and persisted the transaction.
+ */
 export const erpService = {
-  // Master Data
-  async getMasterData(type: string) {
-    try {
-      const res = await api.get(`/erp/master?type=${type}`);
-      return pickList(res.data?.data, MOCK_MASTERS[type] || []);
-    } catch {
-      return MOCK_MASTERS[type] || [];
-    }
-  },
+  getMasterData: (type: string) => list<any>(`/erp/master?type=${encodeURIComponent(type)}`),
+  createMasterData: (type: string, data: any) => create<any>('/erp/master', { type, data }),
+  getPendingMasterApprovals: () => list<any>('/erp/master/approvals'),
+  approveMasterData: (_type: string, id: string, action: 'APPROVE' | 'REJECT', remarks?: string) => create<any>('/erp/master/approve', { id, action, remarks }),
 
-  async createMasterData(type: string, data: any) {
-    try {
-      const res = await api.post('/erp/master', { type, data });
-      return res.data?.data;
-    } catch {
-      const newItem = { id: `${type.toUpperCase().slice(0, 4)}-${Date.now().toString().slice(-4)}`, ...data, status: 'PENDING_APPROVAL' };
-      if (MOCK_MASTERS[type]) MOCK_MASTERS[type].unshift(newItem);
-      return newItem;
-    }
-  },
+  getQuotations: () => list<any>('/erp/quotations'),
+  createQuotation: (data: any) => create<any>('/erp/quotations', data),
+  selectWinningQuotation: (id: string, remarks?: string) => create<any>(`/erp/quotations/${id}/select-winner`, { remarks }),
 
-  async getPendingMasterApprovals() {
-    try {
-      const res = await api.get('/erp/master/approvals');
-      return pickList(res.data?.data, []);
-    } catch {
-      const pending: any[] = [];
-      Object.entries(MOCK_MASTERS).forEach(([type, items]) => {
-        items.forEach((item: any) => {
-          if (item.status === 'PENDING_APPROVAL') pending.push({ type, record: item });
-        });
-      });
-      return pending;
-    }
-  },
+  getPRs: () => list<any>('/erp/prs'),
+  createPR: (data: any) => create<any>('/erp/prs', data),
+  approvePR: (id: string, action: 'APPROVE' | 'REJECT', remarks?: string) => create<any>(`/erp/prs/${id}/approve`, { action, remarks }),
 
-  async approveMasterData(type: string, id: string, action: 'APPROVE' | 'REJECT', remarks?: string) {
-    try {
-      const res = await api.post('/erp/master/approve', { type, id, action, remarks });
-      return res.data?.data;
-    } catch {
-      const target = (MOCK_MASTERS[type] || []).find((item: any) => item.id === id);
-      if (target) target.status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-      return target;
+  getPOs: () => list<any>('/erp/pos'),
+  createPO: (data: any) => create<any>('/erp/pos', data),
+  getGRNs: () => list<ApiRecord>('/erp/grns').then((records) => records.map(mapGRN)),
+  createGRN: (data: any) => create<any>('/erp/grns', {
+    ...data,
+    poNo: data.poNumber,
+    storeName: data.storeName,
+    items: data.items || []
+  }).then(mapGRN),
+  getInventory: () => list<ApiRecord>('/erp/inventory').then((records) => records.map(mapInventory)),
+  getStockIssues: () => list<ApiRecord>('/erp/stock-issues').then((records) => records.map(mapStockIssue)),
+  createStockIssue: (data: any) => create<any>('/erp/stock-issues', {
+    ...data,
+    departmentName: data.department,
+    requestedBy: data.issuedTo,
+    storeName: data.storeLocation,
+    items: (data.items || []).map((item: ApiRecord) => ({
+      ...item,
+      qtyRequested: item.qtyIssued
+    }))
+  }).then(mapStockIssue),
+  getInvoices: () => list<ApiRecord>('/erp/invoices').then((records) => records.map(mapInvoice)),
+  createInvoice: (data: any) => create<any>('/erp/invoices', data).then(mapInvoice),
+  getPayments: () => list<ApiRecord>('/erp/payments').then((records) => records.map(mapPayment)),
+  createPayment: async (data: any) => {
+    const invoices = await list<ApiRecord>('/erp/invoices');
+    const invoice = invoices.find((record) => record.id === data.invoiceId || record.internalInvNo === data.invoiceNumber);
+    if (!invoice) {
+      throw new Error(`Invoice ${data.invoiceNumber || 'selection'} was not found.`);
     }
-  },
 
-  // Quotations
-  async getQuotations() {
-    try {
-      const res = await api.get('/erp/quotations');
-      return pickList(res.data?.data, MOCK_QUOTATIONS);
-    } catch {
-      return MOCK_QUOTATIONS;
-    }
+    return create<ApiRecord>('/erp/payments', {
+      ...data,
+      invoiceId: invoice.id,
+      txnReference: data.referenceNumber,
+      notes: data.remarks
+    }).then(mapPayment);
   },
-
-  async createQuotation(data: any) {
-    try {
-      const res = await api.post('/erp/quotations', data);
-      return res.data?.data;
-    } catch {
-      const newQ = { id: `QUOTE-${Date.now().toString().slice(-4)}`, ...data, status: 'SUBMITTED' };
-      MOCK_QUOTATIONS.unshift(newQ);
-      return newQ;
-    }
-  },
-
-  async selectWinningQuotation(id: string, remarks?: string) {
-    try {
-      const res = await api.post(`/erp/quotations/${id}/select-winner`, { remarks });
-      return res.data?.data;
-    } catch {
-      const q = MOCK_QUOTATIONS.find(x => x.id === id);
-      if (q) q.status = 'SELECTED';
-      return q;
-    }
-  },
-
-  // PR
-  async getPRs() {
-    try {
-      const res = await api.get('/erp/prs');
-      return pickList(res.data?.data, MOCK_PRS);
-    } catch {
-      return MOCK_PRS;
-    }
-  },
-
-  async createPR(data: any) {
-    try {
-      const res = await api.post('/erp/prs', data);
-      return res.data?.data;
-    } catch {
-      const newPR = { id: `PR-${Date.now().toString().slice(-4)}`, prNumber: `PR/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'PENDING_HOD', createdAt: new Date().toISOString().split('T')[0] };
-      MOCK_PRS.unshift(newPR);
-      return newPR;
-    }
-  },
-
-  async approvePR(id: string, action: 'APPROVE' | 'REJECT', remarks?: string) {
-    try {
-      const res = await api.post(`/erp/prs/${id}/approve`, { action, remarks });
-      return res.data?.data;
-    } catch {
-      const pr = MOCK_PRS.find(x => x.id === id);
-      if (pr) pr.status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
-      return pr;
-    }
-  },
-
-  // PO
-  async getPOs() {
-    try {
-      const res = await api.get('/erp/pos');
-      return pickList(res.data?.data, MOCK_POS);
-    } catch {
-      return MOCK_POS;
-    }
-  },
-
-  async createPO(data: any) {
-    try {
-      const res = await api.post('/erp/pos', data);
-      return res.data?.data;
-    } catch {
-      const newPO = { id: `PO-${Date.now().toString().slice(-4)}`, poNumber: `PO/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'APPROVED', poDate: new Date().toISOString().split('T')[0] };
-      MOCK_POS.unshift(newPO);
-      return newPO;
-    }
-  },
-
-  // GRN
-  async getGRNs() {
-    try {
-      const res = await api.get('/erp/grns');
-      return pickList(res.data?.data, MOCK_GRNS);
-    } catch {
-      return MOCK_GRNS;
-    }
-  },
-
-  async createGRN(data: any) {
-    try {
-      const res = await api.post('/erp/grns', data);
-      return res.data?.data;
-    } catch {
-      const newGRN = { id: `GRN-${Date.now().toString().slice(-4)}`, grnNumber: `GRN/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'VERIFIED', receivedDate: new Date().toISOString().split('T')[0] };
-      MOCK_GRNS.unshift(newGRN);
-      return newGRN;
-    }
-  },
-
-  // Inventory
-  async getInventory() {
-    try {
-      const res = await api.get('/erp/inventory');
-      return pickList(res.data?.data, MOCK_INVENTORY);
-    } catch {
-      return MOCK_INVENTORY;
-    }
-  },
-
-  // Stock Issue
-  async getStockIssues() {
-    try {
-      const res = await api.get('/erp/stock-issues');
-      return pickList(res.data?.data, MOCK_STOCK_ISSUES);
-    } catch {
-      return MOCK_STOCK_ISSUES;
-    }
-  },
-
-  async createStockIssue(data: any) {
-    try {
-      const res = await api.post('/erp/stock-issues', data);
-      return res.data?.data;
-    } catch {
-      const newIss = { id: `ISS-${Date.now().toString().slice(-4)}`, issueNumber: `ISS/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'ISSUED', issueDate: new Date().toISOString().split('T')[0] };
-      MOCK_STOCK_ISSUES.unshift(newIss);
-      return newIss;
-    }
-  },
-
-  // Invoices
-  async getInvoices() {
-    try {
-      const res = await api.get('/erp/invoices');
-      return pickList(res.data?.data, MOCK_INVOICES);
-    } catch {
-      return MOCK_INVOICES;
-    }
-  },
-
-  async createInvoice(data: any) {
-    try {
-      const res = await api.post('/erp/invoices', data);
-      return res.data?.data;
-    } catch {
-      const newInv = { id: `INV-${Date.now().toString().slice(-4)}`, invoiceNumber: `INV/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'PENDING_APPROVAL', matched3Way: true };
-      MOCK_INVOICES.unshift(newInv);
-      return newInv;
-    }
-  },
-
-  // Payments
-  async getPayments() {
-    try {
-      const res = await api.get('/erp/payments');
-      return pickList(res.data?.data, MOCK_PAYMENTS);
-    } catch {
-      return MOCK_PAYMENTS;
-    }
-  },
-
-  async createPayment(data: any) {
-    try {
-      const res = await api.post('/erp/payments', data);
-      return res.data?.data;
-    } catch {
-      const newPay = { id: `PAY-${Date.now().toString().slice(-4)}`, paymentNumber: `PAY/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'PROCESSED', paymentDate: new Date().toISOString().split('T')[0] };
-      MOCK_PAYMENTS.unshift(newPay);
-      return newPay;
-    }
-  },
-
-  // Part Payments
-  async getPartPayments() {
-    try {
-      const res = await api.get('/erp/part-payments');
-      return pickList(res.data?.data, MOCK_PART_PAYMENTS);
-    } catch {
-      return MOCK_PART_PAYMENTS;
-    }
-  },
-
-  async createPartPayment(data: any) {
-    try {
-      const res = await api.post('/erp/part-payments', data);
-      return res.data?.data;
-    } catch {
-      const newPP = { id: `PP-${Date.now().toString().slice(-4)}`, ...data, status: 'PENDING_APPROVAL' };
-      MOCK_PART_PAYMENTS.unshift(newPP);
-      return newPP;
-    }
-  },
-
-  // D/C Notes
-  async getDCNotes() {
-    try {
-      const res = await api.get('/erp/dc-notes');
-      return pickList(res.data?.data, MOCK_DC_NOTES);
-    } catch {
-      return MOCK_DC_NOTES;
-    }
-  },
-
-  async createDCNote(data: any) {
-    try {
-      const res = await api.post('/erp/dc-notes', data);
-      return res.data?.data;
-    } catch {
-      const newDC = { id: `DC-${Date.now().toString().slice(-4)}`, noteNumber: `DC/2026/${Math.floor(1000 + Math.random() * 9000)}`, ...data, status: 'APPROVED', noteDate: new Date().toISOString().split('T')[0] };
-      MOCK_DC_NOTES.unshift(newDC);
-      return newDC;
-    }
-  },
-
-  // Projects
-  async getProjects() {
-    try {
-      const res = await api.get('/erp/projects');
-      return pickList(res.data?.data, MOCK_PROJECTS);
-    } catch {
-      return MOCK_PROJECTS;
-    }
-  },
-
-  async createProject(data: any) {
-    try {
-      const res = await api.post('/erp/projects', data);
-      return res.data?.data;
-    } catch {
-      const newProj = { id: `PROJ-${Date.now().toString().slice(-4)}`, committedAmount: 0, actualSpent: 0, status: 'PLANNED', ...data };
-      MOCK_PROJECTS.unshift(newProj);
-      return newProj;
-    }
-  },
-
-  // Summary Metrics
-  async getERPSummary(): Promise<ERPSummaryMetrics> {
-    try {
-      const res = await api.get('/erp/summary');
-      if (res.data?.data) return res.data.data;
-      throw new Error('no summary');
-    } catch {
-      return {
-        totalPRs: MOCK_PRS.length,
-        totalPOs: MOCK_POS.length,
-        totalGRNs: MOCK_GRNS.length,
-        totalInvoices: MOCK_INVOICES.length,
-        pendingApprovalsCount: MOCK_PRS.filter(x => x.status.includes('PENDING')).length + MOCK_MASTERS.vendors.filter((x: any) => x.status === 'PENDING_APPROVAL').length,
-        totalInventoryValue: MOCK_INVENTORY.reduce((sum, item) => sum + item.totalValue, 0),
-        activeProjectsCount: MOCK_PROJECTS.filter(x => x.status === 'ACTIVE').length,
-        totalPaymentsProcessed: MOCK_PAYMENTS.reduce((sum, p) => sum + p.amountPaid, 0)
-      };
-    }
-  }
+  getPartPayments: () => list<any>('/erp/part-payments'),
+  createPartPayment: (data: any) => create<any>('/erp/part-payments', data),
+  getDCNotes: () => list<ApiRecord>('/erp/dc-notes').then((records) => records.map(mapDCNote)),
+  createDCNote: (data: any) => create<any>('/erp/dc-notes', {
+    ...data,
+    type: data.type === 'DEBIT_NOTE' ? 'DEBIT' : 'CREDIT',
+    linkedGrnNo: data.referenceDocType === 'GRN' ? data.referenceDocNumber : undefined,
+    linkedInvoiceNo: data.referenceDocType === 'INVOICE' ? data.referenceDocNumber : undefined,
+    adjustedAmount: data.amount
+  }).then(mapDCNote),
+  getProjects: () => list<ApiRecord>('/erp/projects').then((records) => records.map(mapProject)),
+  createProject: (data: any) => create<any>('/erp/projects', {
+    ...data,
+    departmentName: data.department,
+    manager: data.projectManager,
+    totalBudget: data.budgetAllocated
+  }).then(mapProject),
+  getERPSummary: () => api.get('/erp/summary').then((res) => requireData<ERPSummaryMetrics>(res.data?.data))
 };
