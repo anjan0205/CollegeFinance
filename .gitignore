@@ -62,6 +62,7 @@ Thumbs.db
 
 # Firebase temporary files
 .firebase/
+.genkit/
 
 # Cloudflare Wrangler
 .wrangler/

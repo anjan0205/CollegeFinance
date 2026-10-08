@@ -8,7 +8,7 @@ import {
 } from 'recharts';
 import {
   Wallet, TrendingUp, DollarSign, FileText, CheckCircle2, Clock, XCircle,
-  AlertTriangle, ShieldAlert, ChevronRight, Award, Building2, Plus, FilePlus, Receipt
+  AlertTriangle, ShieldAlert, ChevronRight, Award, Building2, Plus, FilePlus, Receipt, RefreshCw
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { CreatePRModal } from '../components/CreatePRModal';
@@ -25,6 +25,7 @@ export const Dashboard: React.FC = () => {
   const [topSpenders, setTopSpenders] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [isCreatePROpen, setIsCreatePROpen] = useState(false);
   const [isAddBudgetOpen, setIsAddBudgetOpen] = useState(false);
@@ -35,6 +36,7 @@ export const Dashboard: React.FC = () => {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const [sumRes, deptRes, monthRes, statusRes, spenderRes, alertRes] = await Promise.allSettled([
         api.get('/dashboard/summary'),
         api.get('/dashboard/department-utilization'),
@@ -45,6 +47,12 @@ export const Dashboard: React.FC = () => {
       ]);
 
       if (sumRes.status === 'fulfilled' && sumRes.value.data?.success) setSummary(sumRes.value.data.data);
+      else {
+        const message = sumRes.status === 'rejected'
+          ? sumRes.reason?.response?.data?.message || sumRes.reason?.message
+          : sumRes.value.data?.message;
+        setLoadError(message || 'The live dashboard data could not be loaded. Check that the backend and Firebase are connected.');
+      }
       if (deptRes.status === 'fulfilled' && deptRes.value.data?.success) setDeptUtilization(deptRes.value.data.data);
       if (monthRes.status === 'fulfilled' && monthRes.value.data?.success) {
         const data = monthRes.value.data.data || [];
@@ -58,6 +66,7 @@ export const Dashboard: React.FC = () => {
       if (alertRes.status === 'fulfilled' && alertRes.value.data?.success) setAlerts(alertRes.value.data);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
+      setLoadError('The live dashboard data could not be loaded. Check that the backend and Firebase are connected.');
     } finally {
       setLoading(false);
     }
@@ -91,6 +100,22 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3.5 text-slate-200 shadow-md">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-semibold text-sm text-slate-100">Live Dashboard Connection Status</p>
+              <p className="mt-0.5 text-xs text-slate-400 font-medium">{loadError}</p>
+            </div>
+          </div>
+          <button onClick={fetchDashboardData} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:text-white transition-all cursor-pointer">
+            <RefreshCw className="h-3.5 w-3.5 text-slate-400" /> Re-sync Data
+          </button>
+        </div>
+      )}
       {/* Top Banner Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div>

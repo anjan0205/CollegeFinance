@@ -5,6 +5,7 @@ import { ApprovalEngine } from '../services/approvalEngine';
 import { authenticateToken, authorizeRoles, AuthenticatedRequest } from '../middleware/auth';
 import { ensureERPStateHydrated, saveERPState } from '../controllers/erpController';
 import { RequestHandler } from 'express';
+import { getFirestoreDb, isFirebaseEnabled } from '../config/firebase';
 
 const router = Router();
 
@@ -39,13 +40,38 @@ router.post('/master/approve', authorizeRoles('ADMIN', 'FINANCE', 'PRINCIPAL', '
 
 // Approval Matrix Engine
 router.get('/approval-matrix', (req, res) => {
-  res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+  const readRules = async () => {
+    if (isFirebaseEnabled()) {
+      const db = getFirestoreDb();
+      if (!db) throw new Error('Firebase is enabled, but Firestore is unavailable.');
+      const snapshot = await db.collection('systemConfig').doc('approvalMatrix').get();
+      const rules = snapshot.data()?.rules;
+      if (Array.isArray(rules)) ApprovalEngine.updateMatrixRules(rules);
+    }
+    res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+  };
+  readRules().catch((error) => res.status(500).json({ success: false, message: error.message }));
 });
-router.post('/approval-matrix', authorizeRoles('ADMIN'), (req, res) => {
+router.post('/approval-matrix', authorizeRoles('ADMIN'), async (req, res) => {
   const { rules } = req.body;
   if (rules && Array.isArray(rules)) {
-    ApprovalEngine.updateMatrixRules(rules);
-    return res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+    try {
+      if (isFirebaseEnabled()) {
+        const db = getFirestoreDb();
+        if (!db) throw new Error('Firebase is enabled, but Firestore is unavailable.');
+        const batch = db.batch();
+        batch.set(db.collection('systemConfig').doc('approvalMatrix'), { rules, updatedAt: new Date().toISOString() });
+        batch.set(db.collection('auditLogs').doc(), {
+          action: 'APPROVAL_MATRIX_UPDATED', entityType: 'APPROVAL_MATRIX',
+          entityId: 'approvalMatrix', createdAt: new Date().toISOString(), channel: 'PORTAL'
+        });
+        await batch.commit();
+      }
+      ApprovalEngine.updateMatrixRules(rules);
+      return res.status(200).json({ success: true, data: ApprovalEngine.getMatrixRules() });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message || 'Unable to persist the approval matrix.' });
+    }
   }
   return res.status(400).json({ success: false, message: 'Invalid matrix rules format' });
 });

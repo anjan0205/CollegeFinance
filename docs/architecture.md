@@ -188,11 +188,14 @@ sequenceDiagram
 
 - **PR Document Attachments**: Supports direct drag-and-drop / browsing of quotation files, technical specifications, and approval letters (PDF, XLSX, DOCX, Images up to 10MB) stored with metadata and instant preview/download access across the approval and PO workflow.
 
-### 4.3 Firestore Seeding
+### 4.3 Firestore Persistence and Local Development
 
-- **Git as Code & Seed Source of Truth**: Source files and Excel templates (`reference_excel.xlsx`) are committed to Git. The client engine additionally seeds empty ERP collections on first load from [`frontend/src/data/erpSeedData.ts`](file:///d:/College-main/frontend/src/data/erpSeedData.ts).
-- **CLI Script (localhost/dev only)**:
-  - `npm run seed:firebase`: Seeds Firestore directly from parsed Excel master budget spreadsheets.
+- The Express API initializes Firebase Admin from `backend/serviceAccountKey.json`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_SERVICE_ACCOUNT_BASE64`, Application Default Credentials, or the Firestore emulator. Credentials stay on the server; the frontend uses Firebase web configuration only for its legacy client path.
+- At startup the backend loads its embedded baseline, then hydrates departments, budget heads, allocations, PRs, users, and invoices from Firestore. Seed loading and remote hydration are tracked separately so an in-memory seed cannot short-circuit the Firestore read. If Firebase is unavailable, the API reports local fallback mode rather than claiming that remote data was loaded.
+- Budget allocations, PRs, invoices, users, and imported master/PR datasets are written to their corresponding Firestore collections. ERP transactional records are stored beneath `erpState/current/{collection}/{recordId}` and append audit events to `auditLogs`.
+- ERP APIs use Firestore as the authoritative store when configured and use SQLite `ERP_STATE` only when Firebase is not enabled. ERP updates are acknowledged after the persistence operation succeeds; Firebase errors are returned to the caller.
+- `GET /health` reports whether Firebase is configured and whether the remote dataset hydrated, without exposing credentials. When Firebase is configured but hydration fails, the health endpoint reports `DEGRADED` and protected API routes return HTTP 503 instead of serving embedded seed values as current financial data.
+- `npm run seed:firebase` seeds Firestore from the committed reference dataset. Automatic first-connect seeding occurs only when the required budget master collections are empty.
 
 ### 4.4 Entity Status Lifecycles & Governed Transitions
 
@@ -225,30 +228,49 @@ stamped (`stampCreate`) with the common envelope:
   history: { by, action, at, note? }[], approvedBy?, approvedAt?, rejectionReason? }
 ```
 
-**Server-side logic mapping (target §9):** Express is the transaction authority
-for `/api/erp/*`. In local fallback mode it hydrates and persists the ERP
-aggregate using SQLite; mutations are audited before the success response is
-returned. Firebase remains an integration/migration dependency, not an
-authorization substitute.
+**Server-side logic mapping:** Express is the transaction authority for `/api/erp/*`.
+It hydrates the ERP state from Firestore when configured, persists changed records
+to Firestore before returning success, and records the mutation in `auditLogs`.
+SQLite `ERP_STATE` is used only when Firebase is not configured. Firebase
+credentials never replace API authentication or role checks.
 
 ---
 
 ## 5. Cross-Cutting Concerns ✂️
 
 ### 5.1 Security Model & RBAC
-- **Role Isolation**: Granular permissions enforced across roles (`ADMIN`, `FINANCE`, `HOD`, `DEPARTMENT_USER`, `PRINCIPAL`, `CEO`, `STORE`), centralized in [`frontend/src/config/permissions.ts`](file:///d:/College-main/frontend/src/config/permissions.ts). Menu items are hidden per role in `Sidebar.tsx`, and `DashboardLayout.tsx` guards direct-URL access — an unauthorized route redirects to `/403`.
+- **Role Isolation**: Frontend navigation and route permissions are centralized in [`frontend/src/config/permissions.ts`](../frontend/src/config/permissions.ts) for `ADMIN`, `FINANCE`, `HOD`, `DEPARTMENT_USER`, `PRINCIPAL`, `CEO`, and `STORE`. ERP submodules have distinct route keys so Store access is limited to GRN, inventory, and stock issue, executive access is limited to approvals, and direct URLs receive the same checks as sidebar links. The map improves navigation and is not a security boundary.
 - **ERP API Enforcement**: All `/api/erp/*` endpoints require a verified JWT. The API enforces mutation-specific roles: department users/HODs can submit PRs and master requests; Finance/Admin manages financial documents; Store manages GRN and stock issue; executive roles decide authorized approvals. UI visibility is not treated as authorization.
+- **Hardened Authentication**: Eliminates default email pattern bypasses. Authenticates against strict credential validation before issuing 24-hour signed JWT tokens.
+- **Request Body & Stream Protection**: Standardized on bounded `express.json` and `express.urlencoded` parsers (10MB limit) to prevent memory leaks and stream collisions.
 - **Tokenized One-Click Approval Links**: Direct email links use cryptographic tokens verifying identity and preventing unauthorized modification.
 - **Input Sanitization**: Defense against XSS and injection when parsing uploaded Excel datasets and rendering document previews.
 
+### 5.1.1 Frontend Route-to-Module Map
+
+| Route family | Frontend permission key | Intended access |
+| :--- | :--- | :--- |
+| `/prs/*` | `prs` | Department, HOD, Finance, Admin, Principal, CEO |
+| `/budget/*` | `budget` | HOD, Finance, Admin |
+| `/pos/*` | `po` | HOD, Finance, Admin |
+| `/erp/master-data*` | `masters` | Department, HOD, Finance, Admin, Principal, CEO |
+| `/erp/master-approval*` | `masterApproval` | Principal, CEO, Finance, Admin |
+| `/erp/grn-data`, `/erp/inventory`, `/erp/stock-issue` | `grn`, `inventory`, `stockIssue` | Store, Finance, Admin |
+| `/erp/invoice-data`, `/erp/payments`, `/erp/part-payments`, `/erp/dc-notes` | `erpInvoices`, `payments` | Finance, Admin |
+| `/erp/quotations`, `/erp/rfq`, `/erp/projects` | module specific | Department, HOD, Finance, Admin |
+| `/erp/reports`, `/reports` | `erpReports`, `reports` | Finance, Admin (institutional reporting) |
+| `/users`, `/audit`, `/settings` | `users`, `audit`, `settings` | Admin; audit also Finance; settings per assigned role |
+
+Every route family listed in `frontend/src/App.tsx` must remain mapped here and in the frontend permission resolver. Unknown authenticated routes resolve to the in-layout 404 page; 404 recovery links are filtered by role to avoid forbidden redirect loops. API authorization must independently check the actor, record scope, and allowed lifecycle transition on every request.
+
 ### 5.2 Error Handling & Resilience
-- **Multi-Level Storage Fallback**: Automatic failover between Direct Firebase Firestore, PostgreSQL, and local SQLite.
+- **Storage Selection**: Firestore is the configured localhost/production source when Firebase Admin credentials are available; SQLite is the local persistence fallback when Firebase is not configured. PostgreSQL synchronization is an optional integration and is not an implicit substitute for a failed Firestore write.
 - **Comprehensive UX Error States**: Dedicated standalone pages for `404 Not Found`, `403 Forbidden`, `500 Server Error`, `Session Expired`, `Offline Detection`, and `Maintenance Mode`.
 - **SPA Refresh Fallback**: When Express serves the local Vite production build, it returns `frontend/dist/index.html` for HTML navigation requests that do not match a static file. This allows React `BrowserRouter` to resolve deep links after a direct load or page refresh, while `/api/*`, `/health`, and missing non-HTML assets retain their normal server responses.
 
 ### 5.3 Audit Trails
 - All financial allocations, budget transfers, purchase orders, and master approvals append immutable timestamped audit entries logging the actor, channel (`EMAIL` vs `PORTAL`), and decision rationale.
-- **ERP durability**: The local SQLite backend persists the ERP document aggregate in `ERP_STATE` and writes a corresponding `AUDIT_LOGS` event only after a successful ERP mutation. The controller hydrates this state before serving `/api/erp/*`, so submitted PRs, purchase documents, inventory effects, invoices, and payments survive backend restarts in local fallback mode.
+- **ERP durability**: ERP records persist in Firestore subcollections under `erpState/current` when Firebase is enabled. The local SQLite `ERP_STATE` aggregate and `AUDIT_LOGS` table are used only in local fallback mode. The controller hydrates the selected store before serving `/api/erp/*` and returns mutation success only after that store acknowledges the write.
 
 ### 5.4 Performance & CDN Optimization Architecture
 - **Firebase Hosting Global Edge Caching**: Configured in `firebase.json` with immutable 1-year caching (`Cache-Control: public, max-age=31536000, immutable`) for hashed `/assets/**` chunks and 30-day stale-while-revalidate for static media, while keeping `/index.html` strictly un-cached for instantaneous deployment updates.

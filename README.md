@@ -1,22 +1,19 @@
-# College Budget & PR Management System
+# VIIT College Budget & Procure-to-Pay ERP
 
-A production-grade, centralized web application built for an engineering college (Vignan's Institute of Information Technology) to replace Excel-based budget analysis and PR tracking workflows.
+A centralized finance and ERP application for Vignan's Institute of Information Technology. It connects institutional budgets and departmental requisitions to vendor onboarding, quotation and RFQ workflows, purchase orders, goods receipt, inventory, invoice matching, payments, approvals, and audit reporting.
 
-The system normalizes raw financial Excel workbooks into a relational cloud database schema and provides real-time financial dashboards, department utilization analytics, budget head monitoring, PR tracking, and Excel data import capabilities.
-
-> [!NOTE]
-> **Financial Monitoring Scope**: Per business requirements, this system is **NOT** a procurement transaction engine. It intentionally omits PR Creation, PR Editing, Vendor Management, and PO Generation. PRs are imported and tracked strictly for financial monitoring, budget commitment analysis, and reporting.
+The frontend and backend include operational procurement modules. Production use depends on configuring the deployment database, authentication secrets, mail delivery, and institutional approval policy; local/demo behavior must not be treated as production authorization.
 
 ---
 
 ## 1. Technology Stack
 
 - **Frontend**: React 18, Vite, TypeScript, Tailwind CSS, Recharts, Lucide Icons, Axios, React Router v6 (Deployed on **Cloudflare Pages**)
-- **Backend**: Node.js, Express.js, TypeScript, Cloudflare Workers (`cloudflare:node`), JWT Authentication, bcrypt, Multer, SheetJS (`xlsx`) (Deployed on **Cloudflare Workers**)
+- **Backend**: Node.js, Express.js, TypeScript, JWT Authentication, bcrypt, Multer, SheetJS (`xlsx`)
 - **Database Architecture**: Multi-Engine Support:
   - **Firebase Firestore** (Direct Cloud NoSQL Mode)
   - **Google Cloud SQL / PostgreSQL** (Relational Cloud Mode)
-  - **SQLite** (Local Fallback Mode)
+  - **SQLite** (local persistence mode)
 
 ---
 
@@ -34,7 +31,7 @@ Express.js Backend (Cloudflare Workers)
          └──► SQLite (Local Fallback)
 ```
 
-> 📖 **Comprehensive System Architecture Map**: For detailed C4 models, component catalogs, 2-tier approval workflows, and data lifecycle diagrams, see **[docs/architecture.md](file:///docs/architecture.md)**.
+> 📖 **System Architecture Map**: For current C4 models, component catalog, approval workflows, data lifecycles, RBAC, and persistence details, see [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -108,7 +105,11 @@ Express.js Backend (Cloudflare Workers)
 - Firebase Cloud Firestore / PostgreSQL / SQLite Database
 
 ### 1. Database Setup
-Execute SQL scripts in order:
+Firestore is the primary store when the backend has a Firebase Admin service account. Keep the credential in the ignored `backend/serviceAccountKey.json` file or configure `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_SERVICE_ACCOUNT_BASE64`, or `GOOGLE_APPLICATION_CREDENTIALS`; never commit service-account credentials. The frontend `.env` must contain the Firebase web app values from `frontend/.env.example`.
+
+Start the backend and check `http://localhost:5000/health`. A connected local setup reports `"storage":"firebase"` and `"firebaseDatasetLoaded":true`. When Firebase is configured but cannot be reached, protected API requests return HTTP 503 instead of showing embedded demo figures as live data.
+
+For the optional relational import/fallback database, execute SQL scripts in order:
 ```sql
 @database/01_schema.sql
 @database/02_constraints.sql

@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import path from 'path';
 import fs from 'fs';
 import { PRRecord, ImportBatch, ImporterErrorRecord, PRItem } from '../types';
-import { getSeedPRRecords, getSeedBudgetAllocations, recalculateCommittedAmounts, getSeedDepartments, getSeedBudgetHeads, loadSeedData, normalizeDeptCode, smartInferBudgetHead } from '../utils/seedData';
+import { getSeedPRRecords, getSeedBudgetAllocations, recalculateCommittedAmounts, getSeedDepartments, getSeedBudgetHeads, loadSeedData, normalizeDeptCode, seedFirebaseFromLocalData, smartInferBudgetHead } from '../utils/seedData';
 import { sqliteDb, runSqlAsync } from '../config/sqlDatabase';
 
 export interface ImportResult {
@@ -287,6 +287,10 @@ export async function processPRExcelImport(filePath: string, filename: string, u
       [err.id, err.batchId, err.rowNumber, err.prNumber || null, err.errorMessage, err.rawData]
     );
   }
+
+  // Keep the imported PR/allocation data in the same remote source the API
+  // hydrates on startup. The import is acknowledged only after Firestore saves.
+  await seedFirebaseFromLocalData();
 
   return { batch: batchRecord, errors };
 }

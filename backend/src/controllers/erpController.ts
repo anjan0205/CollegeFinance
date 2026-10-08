@@ -716,10 +716,55 @@ export const verifyInvoice = (req: Request, res: Response) => {
   res.json({ success: true, data: inv });
 };
 export const getPartPayments = (req: Request, res: Response) => {
-  res.json({ success: true, data: [] });
+  const partPayments = paymentsStore.filter(p => p.isAdvance || (invoicesStore.find(i => i.id === p.invoiceId)?.status === 'PARTIALLY_PAID'));
+  res.json({ success: true, data: partPayments });
 };
 export const createPartPayment = (req: Request, res: Response) => {
-  res.status(201).json({ success: true, data: req.body });
+  req.body.isAdvance = true;
+  return createPayment(req, res);
 };
+
+export function createPOFromRFQInternal(rfq: any, quote: any): PurchaseOrder {
+  const subtotal = quote.totalAmount || 0;
+  const taxTotal = subtotal * 0.18;
+  const grandTotal = subtotal + taxTotal;
+  const newPo: PurchaseOrder = {
+    id: `PO-${Date.now()}`,
+    poNo: generateNo('PO', posStore.length),
+    prId: rfq.prId || 'PR-401',
+    prNo: rfq.prNumber || 'PR/2026/0001',
+    quotationId: quote.id,
+    vendorId: quote.vendorId,
+    vendorName: quote.vendorName,
+    vendorGstin: '27AAACT1042A1Z5',
+    date: new Date().toISOString().split('T')[0],
+    deliveryDate: new Date(Date.now() + (quote.deliveryDays || 7) * 86400000).toISOString().split('T')[0],
+    paymentTerms: '30 Days Net',
+    deliveryAddress: 'VIIT Central Stores, Main Campus, Pune',
+    items: (quote.lineItems || []).map((it: any) => ({
+      itemId: `I-${Date.now()}`,
+      itemCode: 'ITM-RFQ-01',
+      itemName: it.description,
+      uom: 'pcs',
+      qtyOrdered: it.quantity,
+      qtyReceived: 0,
+      unitPrice: it.unitPrice,
+      taxRatePct: 18,
+      taxAmount: (it.totalPrice || 0) * 0.18,
+      totalAmount: (it.totalPrice || 0) * 1.18
+    })),
+    subtotal,
+    taxTotal,
+    grandTotal,
+    status: 'APPROVED',
+    createdBy: 'RFQ Engine',
+    createdAt: new Date().toISOString().split('T')[0],
+    history: [{ timestamp: new Date().toLocaleString(), action: 'PO Generated from RFQ Selection', user: 'RFQ Engine' }]
+  };
+  posStore.unshift(newPo);
+  return newPo;
+}
+
 export const getERPSummary = getERPReports;
+
 

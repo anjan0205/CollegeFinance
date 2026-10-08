@@ -25,7 +25,13 @@ api.interceptors.request.use(async (config) => {
 // Response interceptor
 api.interceptors.response.use(
   (response) => response,
-  (error) => Promise.reject(error)
+  (error) => {
+    if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+      console.warn('[API Interceptor] Token expired or invalid. Clearing token.');
+      localStorage.removeItem('college_budget_token');
+    }
+    return Promise.reject(error);
+  }
 );
 
 export default api;

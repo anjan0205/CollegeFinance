@@ -181,7 +181,7 @@ export async function updatePRStatus(req: AuthenticatedRequest, res: Response) {
     const prId = isNaN(Number(id)) ? id : parseInt(id, 10);
 
     const { updatePRStatusRecord } = require('../utils/seedData');
-    const updatedPR = updatePRStatusRecord(prId, approvalStatus, status, prPoStatus, tierApproval);
+    const updatedPR = await updatePRStatusRecord(prId, approvalStatus, status, prPoStatus, tierApproval);
 
     if (!updatedPR) {
       return res.status(404).json({ success: false, message: 'PR record not found.' });
@@ -237,7 +237,7 @@ export async function createPR(req: AuthenticatedRequest, res: Response) {
     }
 
     const { createPRRecord } = require('../utils/seedData');
-    const newPR = createPRRecord({
+    const newPR = await createPRRecord({
       departmentId: targetDeptId,
       budgetHeadId: parseInt(budgetHeadId, 10),
       requestedBy: requestedBy || req.user?.name || 'Department HOD',

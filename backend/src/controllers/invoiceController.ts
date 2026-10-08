@@ -147,7 +147,7 @@ export async function createInvoice(req: AuthenticatedRequest, res: Response) {
       });
     }
 
-    const newInvoice = createInvoiceRecord({
+    const newInvoice = await createInvoiceRecord({
       invoiceNumber,
       invoiceDate,
       prId,
@@ -177,7 +177,7 @@ export async function updateInvoiceStatus(req: AuthenticatedRequest, res: Respon
       return res.status(400).json({ success: false, message: 'Status parameter is required.' });
     }
 
-    const updated = updateInvoiceStatusRecord(id, status, paymentStatus);
+    const updated = await updateInvoiceStatusRecord(id, status, paymentStatus);
 
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Invoice record not found.' });

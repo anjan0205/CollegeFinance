@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getFirestoreDb, isFirebaseEnabled } from '../config/firebase';
 
 export interface RFQItem {
   id: string;
@@ -77,16 +78,39 @@ let mockRFQs: RFQItem[] = [
   }
 ];
 
-export const getRFQs = (req: Request, res: Response) => {
+async function loadRFQs(): Promise<void> {
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) throw new Error('Firebase is enabled, but Firestore is unavailable.');
+  const snapshot = await db.collection('rfqs').get();
+  if (!snapshot.empty) mockRFQs = snapshot.docs.map((record: any) => record.data() as RFQItem);
+}
+
+async function saveRFQ(rfq: RFQItem, action: string): Promise<void> {
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) throw new Error('Firebase is enabled, but Firestore is unavailable.');
+  const batch = db.batch();
+  batch.set(db.collection('rfqs').doc(rfq.id), rfq);
+  batch.set(db.collection('auditLogs').doc(), {
+    action, entityType: 'RFQ', entityId: rfq.id,
+    createdAt: new Date().toISOString(), channel: 'PORTAL'
+  });
+  await batch.commit();
+}
+
+export const getRFQs = async (req: Request, res: Response) => {
   try {
+    await loadRFQs();
     return res.status(200).json({ success: true, data: mockRFQs });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const getRFQById = (req: Request, res: Response) => {
+export const getRFQById = async (req: Request, res: Response) => {
   try {
+    await loadRFQs();
     const { id } = req.params;
     const rfq = mockRFQs.find((r) => r.id === id || r.rfqNumber === id);
     if (!rfq) {
@@ -98,8 +122,9 @@ export const getRFQById = (req: Request, res: Response) => {
   }
 };
 
-export const createRFQ = (req: Request, res: Response) => {
+export const createRFQ = async (req: Request, res: Response) => {
   try {
+    await loadRFQs();
     const { prId, prNumber, departmentId, departmentName, title, vendorIds, dueDate } = req.body;
 
     if (!prId || !vendorIds || vendorIds.length === 0) {
@@ -123,14 +148,16 @@ export const createRFQ = (req: Request, res: Response) => {
     };
 
     mockRFQs.unshift(newRFQ);
+    await saveRFQ(newRFQ, 'RFQ_CREATED');
     return res.status(201).json({ success: true, data: newRFQ, message: 'RFQ created successfully' });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const submitQuote = (req: Request, res: Response) => {
+export const submitQuote = async (req: Request, res: Response) => {
   try {
+    await loadRFQs();
     const { rfqId, vendorId, vendorName, lineItems, totalAmount, deliveryDays } = req.body;
 
     const rfq = mockRFQs.find((r) => r.id === rfqId || r.rfqNumber === rfqId);
@@ -150,14 +177,16 @@ export const submitQuote = (req: Request, res: Response) => {
     };
 
     rfq.quotes.push(newQuote);
+    await saveRFQ(rfq, 'RFQ_QUOTE_SUBMITTED');
     return res.status(201).json({ success: true, data: newQuote, message: 'Quote submitted successfully' });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const selectWinningQuote = (req: Request, res: Response) => {
+export const selectWinningQuote = async (req: Request, res: Response) => {
   try {
+    await loadRFQs();
     const { rfqId, quoteId, justificationForNonLowest } = req.body;
 
     const rfq = mockRFQs.find((r) => r.id === rfqId || r.rfqNumber === rfqId);
@@ -188,19 +217,11 @@ export const selectWinningQuote = (req: Request, res: Response) => {
 
     rfq.selectedQuoteId = quoteId;
     rfq.status = 'AWARDED';
+    await saveRFQ(rfq, 'RFQ_VENDOR_AWARDED');
 
-    // Generate PO reference metadata
-    const generatedPO = {
-      poNumber: `PO-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      prId: rfq.prId,
-      rfqId: rfq.id,
-      vendorId: quote.vendorId,
-      vendorName: quote.vendorName,
-      totalAmount: quote.totalAmount,
-      expectedDelivery: new Date(Date.now() + quote.deliveryDays * 86400000).toISOString().split('T')[0],
-      status: 'ISSUED',
-      createdAt: new Date().toISOString()
-    };
+    // Generate and persist Purchase Order in ERP ledger
+    const { createPOFromRFQInternal } = require('./erpController');
+    const generatedPO = createPOFromRFQInternal(rfq, quote);
 
     return res.status(200).json({
       success: true,

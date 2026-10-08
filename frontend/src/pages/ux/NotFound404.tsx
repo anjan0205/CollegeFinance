@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Home, ArrowLeft, Search, Compass, FileQuestion, LifeBuoy } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
+import { canAccessRoute, getHomeRoute } from '../../config/permissions';
 
 export const NotFound404: React.FC = () => {
   const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
 
   const quickLinks = [
@@ -13,7 +16,8 @@ export const NotFound404: React.FC = () => {
     { name: 'Invoices & Ledger', path: '/invoices' },
     { name: 'Help Center', path: '/help' },
     { name: 'Legal Policies', path: '/legal' }
-  ];
+  ].filter(link => !isAuthenticated || canAccessRoute(user?.role, link.path));
+  const homeRoute = isAuthenticated ? getHomeRoute(user?.role) : '/login';
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +104,7 @@ export const NotFound404: React.FC = () => {
             <span>Go Back</span>
           </button>
           <Link
-            to="/dashboard"
+            to={homeRoute}
             className="px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-lg shadow-brand-500/20 transition"
           >
             <Home className="w-4 h-4" />

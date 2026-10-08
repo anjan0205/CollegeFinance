@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { getSeedUsers, getSeedDepartments } from '../utils/seedData';
+import { getSeedUsers, getSeedDepartments, syncUserToFirestore } from '../utils/seedData';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { UserRole } from '../types';
 
@@ -38,6 +38,7 @@ export async function createUser(req: AuthenticatedRequest, res: Response) {
       departmentName: deptObj ? deptObj.name : null
     };
 
+    await syncUserToFirestore(newUser);
     users.push(newUser);
 
     return res.status(201).json({
@@ -63,18 +64,22 @@ export async function updateUser(req: AuthenticatedRequest, res: Response) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
-    if (name) user.name = name;
-    if (role) user.role = role as UserRole;
+    const updatedUser = { ...user };
+    if (name) updatedUser.name = name;
+    if (role) updatedUser.role = role as UserRole;
 
     if (departmentId) {
       const departments = getSeedDepartments();
       const deptObj = departments.find(d => d.id === parseInt(departmentId, 10));
       if (deptObj) {
-        user.departmentId = deptObj.id;
-        user.departmentCode = deptObj.code;
-        user.departmentName = deptObj.name;
+        updatedUser.departmentId = deptObj.id;
+        updatedUser.departmentCode = deptObj.code;
+        updatedUser.departmentName = deptObj.name;
       }
     }
+
+    await syncUserToFirestore(updatedUser);
+    Object.assign(user, updatedUser);
 
     return res.json({
       success: true,

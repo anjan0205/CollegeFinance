@@ -5,8 +5,8 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import apiRouter from './routes';
 import { initializeDatabasePool, closeDatabasePool } from './config/database';
-import { loadSeedData, syncDataFromFirebase, syncDataFromPostgres } from './utils/seedData';
-import { initializeFirebase } from './config/firebase';
+import { isFirebaseDatasetLoaded, loadSeedData, syncDataFromFirebase, syncDataFromPostgres } from './utils/seedData';
+import { initializeFirebase, isFirebaseEnabled } from './config/firebase';
 import { initializeSqlDatabase } from './config/sqlDatabase';
 import { initializePostgres, closePostgresPool } from './config/postgresDatabase';
 
@@ -25,59 +25,24 @@ try {
   console.log('[Uploads Dir] Skipping directory creation (read-only environment).');
 }
 
-// Middleware
+// Security & Body Parsing Middleware
 app.use(cors({
-  origin: true,
+  origin: process.env.CORS_ORIGIN || true,
   credentials: true
 }));
 
-app.use((req: any, res, next) => {
-  if (req.headers['content-type']?.includes('application/json')) {
-    let data = '';
-    req.on('data', (chunk: any) => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      try {
-        req.body = data ? JSON.parse(data) : {};
-        next();
-      } catch (e) {
-        res.status(400).json({ error: 'Invalid JSON body' });
-      }
-    });
-  } else if (req.headers['content-type']?.includes('application/x-www-form-urlencoded')) {
-    let data = '';
-    req.on('data', (chunk: any) => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      try {
-        const params = new URLSearchParams(data);
-        const parsed: any = {};
-        for (const [key, value] of params.entries()) {
-          parsed[key] = value;
-        }
-        req.body = parsed;
-        next();
-      } catch (e) {
-        next();
-      }
-    });
-  } else {
-    next();
-  }
-});
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Firebase configuration is initialized and synchronized asynchronously in startServer()
-
-// Server Initialization Logic for Serverless / Worker / Container environments
+// Shared startup promise prevents the first HTTP request from starting a second
+// full Firestore hydration while the server boot sequence is already syncing.
 let serverInitPromise: Promise<void> | null = null;
 async function ensureServerInitialized() {
   if (!serverInitPromise) {
     serverInitPromise = (async () => {
       console.log('[Server Initializer] Initializing master dataset and Firestore synchronization...');
-      loadSeedData(true);
-      await syncDataFromFirebase();
+      loadSeedData();
+      if (isFirebaseEnabled() && !isFirebaseDatasetLoaded()) await syncDataFromFirebase();
     })();
   }
   return serverInitPromise;
@@ -89,6 +54,20 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     await ensureServerInitialized();
   } catch (err) {
     console.error('[Server Init Warning]', err);
+  }
+  // Do not report embedded seed values as live financial data when the
+  // configured Firestore database failed to hydrate.
+  if (
+    req.path.startsWith('/api/') &&
+    isFirebaseEnabled() &&
+    !isFirebaseDatasetLoaded() &&
+    req.path !== '/api/auth/login'
+  ) {
+    return res.status(503).json({
+      success: false,
+      code: 'FIREBASE_NOT_READY',
+      message: 'Firebase is configured but its dataset could not be loaded. Check the backend Firebase credentials and Firestore access.'
+    });
   }
   next();
 });
@@ -104,7 +83,15 @@ app.use('/api', apiRouter);
 
 // Health Check
 app.get('/health', (req: Request, res: Response) => {
-  res.json({ status: 'OK', system: 'College Budget & PR Management System Backend', time: new Date() });
+  const firebaseReady = isFirebaseEnabled() && isFirebaseDatasetLoaded();
+  res.status(isFirebaseEnabled() && !firebaseReady ? 503 : 200).json({
+    status: isFirebaseEnabled() && !firebaseReady ? 'DEGRADED' : 'OK',
+    system: 'College Budget & PR Management System Backend',
+    storage: firebaseReady ? 'firebase' : isFirebaseEnabled() ? 'firebase-sync-pending' : 'local-fallback',
+    firebaseConfigured: isFirebaseEnabled(),
+    firebaseDatasetLoaded: isFirebaseDatasetLoaded(),
+    time: new Date()
+  });
 });
 
 // Serve frontend static build files (Unified local dev server only)
@@ -141,19 +128,14 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 
 // Start Server
 async function startServer() {
-  const server = app.listen(PORT, () => {
-    console.log(`==================================================`);
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`==================================================`);
-  });
-
   console.log('[Seed Engine] Loading Master Budget & PR dataset from reference Excel...');
   loadSeedData(true);
 
   const firebaseInitialized = initializeFirebase();
   if (firebaseInitialized) {
     console.log('[Firebase Mode] Server operating in Direct Firebase Firestore Mode.');
-    await syncDataFromFirebase();
+    serverInitPromise = syncDataFromFirebase().then(() => undefined);
+    await serverInitPromise;
   } else {
     const pgConnected = await initializePostgres();
     if (pgConnected) {
@@ -161,9 +143,19 @@ async function startServer() {
     } else {
       console.log('[Fallback Mode] Operating in Local SQLite fallback mode.');
       await initializeDatabasePool();
-      await initializeSqlDatabase();
     }
+    serverInitPromise = Promise.resolve();
   }
+
+  // Excel import history and diagnostics still use local relational tables
+  // as an operational journal, even when Firestore is the primary ERP store.
+  await initializeSqlDatabase();
+
+  const server = app.listen(PORT, () => {
+    console.log(`==================================================`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`==================================================`);
+  });
 
   // Graceful Shutdown
   process.on('SIGINT', async () => {

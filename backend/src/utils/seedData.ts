@@ -24,6 +24,9 @@ let users: User[] = [];
 let invoiceRecords: InvoiceRecord[] = [];
 
 let isInitialized = false;
+// Seed loading and remote hydration are separate states. Embedded seed data
+// must never make the Firebase sync path believe the remote dataset is loaded.
+let firebaseDataSynced = false;
 
 // Department Mapping
 export const DEPT_NAME_MAP: Record<string, { code: string; name: string; category: string }> = {
@@ -644,29 +647,29 @@ export function recalculateCommittedAmounts() {
   });
 }
 
-export function updateAllocationAmount(allocationId: number, newAllocatedAmount: number): BudgetAllocation | null {
+export async function updateAllocationAmount(allocationId: number, newAllocatedAmount: number): Promise<BudgetAllocation | null> {
   const alloc = budgetAllocations.find(a => a.id === allocationId);
   if (alloc) {
     alloc.allocatedAmount = newAllocatedAmount;
     recalculateCommittedAmounts();
-    syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
+    await syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
     return alloc;
   }
   return null;
 }
 
-export function updateBudgetHeadAllocation(departmentId: number, budgetHeadId: number, newAllocatedAmount: number): BudgetAllocation | null {
+export async function updateBudgetHeadAllocation(departmentId: number, budgetHeadId: number, newAllocatedAmount: number): Promise<BudgetAllocation | null> {
   let alloc = budgetAllocations.find(a => a.departmentId === departmentId && a.budgetHeadId === budgetHeadId);
   if (alloc) {
     alloc.allocatedAmount = newAllocatedAmount;
     recalculateCommittedAmounts();
-    syncAllocationToFirestore(departmentId, budgetHeadId);
+    await syncAllocationToFirestore(departmentId, budgetHeadId);
     return alloc;
   }
   return null;
 }
 
-export function updatePRStatusRecord(
+export async function updatePRStatusRecord(
   id: number | string,
   approvalStatus?: 'Approved' | 'Pending' | 'Rejected',
   status?: 'Open' | 'Approved' | 'Pending' | 'Rejected' | 'Closed',
@@ -677,7 +680,7 @@ export function updatePRStatusRecord(
     remarks?: string;
     actionBy?: string;
   }
-): PRRecord | null {
+): Promise<PRRecord | null> {
   loadSeedData();
   const pr = prRecords.find(p => String(p.id) === String(id) || p.prNumber.toLowerCase() === String(id).toLowerCase());
   if (!pr) return null;
@@ -794,12 +797,12 @@ export function updatePRStatusRecord(
   }
 
   recalculateCommittedAmounts();
-  syncPRToFirestore(pr);
-  syncAllocationToFirestore(pr.departmentId, pr.budgetHeadId);
+  await syncPRToFirestore(pr);
+  await syncAllocationToFirestore(pr.departmentId, pr.budgetHeadId);
   return pr;
 }
 
-export function createPRRecord(prInput: {
+export async function createPRRecord(prInput: {
   departmentId: number;
   budgetHeadId: number;
   requestedBy: string;
@@ -831,7 +834,7 @@ export function createPRRecord(prInput: {
     type?: string;
     uploadedAt?: string;
   }>;
-}): PRRecord {
+}): Promise<PRRecord> {
   loadSeedData();
 
   const deptObj = departments.find(d => d.id === prInput.departmentId) || departments[0];
@@ -943,17 +946,17 @@ export function createPRRecord(prInput: {
   prItemsMap.set(nextId, createdItems);
 
   recalculateCommittedAmounts();
-  syncPRToFirestore(newPR);
-  syncAllocationToFirestore(newPR.departmentId, newPR.budgetHeadId);
+  await syncPRToFirestore(newPR);
+  await syncAllocationToFirestore(newPR.departmentId, newPR.budgetHeadId);
   return newPR;
 }
 
-export function createOrUpdateBudgetAllocation(
+export async function createOrUpdateBudgetAllocation(
   departmentId: number,
   budgetHeadId: number,
   allocatedAmount: number,
   financialYear: string = '2026-27'
-): BudgetAllocation {
+): Promise<BudgetAllocation> {
   loadSeedData();
 
   let alloc = budgetAllocations.find(a => a.departmentId === departmentId && a.budgetHeadId === budgetHeadId);
@@ -985,7 +988,7 @@ export function createOrUpdateBudgetAllocation(
   }
 
   recalculateCommittedAmounts();
-  syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
+  await syncAllocationToFirestore(alloc.departmentId, alloc.budgetHeadId);
   return alloc;
 }
 
@@ -1031,7 +1034,7 @@ export function getSeedInvoices(): InvoiceRecord[] {
   return invoiceRecords;
 }
 
-export function createInvoiceRecord(input: {
+export async function createInvoiceRecord(input: {
   invoiceNumber: string;
   invoiceDate?: string;
   prId: number | string;
@@ -1040,7 +1043,7 @@ export function createInvoiceRecord(input: {
   taxAmount?: number;
   remarks?: string;
   submittedBy?: string;
-}): InvoiceRecord {
+}): Promise<InvoiceRecord> {
   loadSeedData();
   if (invoiceRecords.length === 0) {
     initDefaultInvoices();
@@ -1075,16 +1078,16 @@ export function createInvoiceRecord(input: {
   recalculateCommittedAmounts();
 
   // Persist to database
-  syncInvoiceToFirestore(newInvoice).catch(err => console.error(`[Invoice Sync] Create sync error: ${err.message}`));
+  await syncInvoiceToFirestore(newInvoice);
 
   return newInvoice;
 }
 
-export function updateInvoiceStatusRecord(
+export async function updateInvoiceStatusRecord(
   id: number | string,
   status: 'Pending' | 'Approved' | 'Paid' | 'Rejected',
   paymentStatus?: 'Unpaid' | 'Partial' | 'Paid'
-): InvoiceRecord | null {
+): Promise<InvoiceRecord | null> {
   loadSeedData();
   if (invoiceRecords.length === 0) {
     initDefaultInvoices();
@@ -1104,7 +1107,7 @@ export function updateInvoiceStatusRecord(
   recalculateCommittedAmounts();
 
   // Persist to database
-  syncInvoiceToFirestore(inv).catch(err => console.error(`[Invoice Sync] Update sync error: ${err.message}`));
+  await syncInvoiceToFirestore(inv);
 
   return inv;
 }
@@ -1128,10 +1131,12 @@ export async function syncAllocationToFirestore(departmentId: number | string, b
   if (alloc) {
     try {
       const cleaned = JSON.parse(JSON.stringify(alloc));
-      await db.collection('budgetAllocations').doc(alloc.sourceBudgetCode).set(cleaned);
+      const documentId = alloc.sourceBudgetCode || `${alloc.budgetHeadCode}_${alloc.departmentCode}`;
+      await db.collection('budgetAllocations').doc(String(documentId)).set(cleaned, { merge: true });
       console.log(`[Firebase] Synced budget allocation ${alloc.sourceBudgetCode} to Firestore.`);
     } catch (err: any) {
       console.error(`[Firebase Error] Failed to sync allocation: ${err.message}`);
+      throw new Error(`Firebase could not save budget allocation: ${err.message}`);
     }
   }
 }
@@ -1150,6 +1155,7 @@ export async function syncPRToFirestore(pr: PRRecord) {
     console.log(`[Firebase] Synced PR ${pr.prNumber} to Firestore.`);
   } catch (err: any) {
     console.error(`[Firebase Error] Failed to sync PR: ${err.message}`);
+    throw new Error(`Firebase could not save purchase requisition: ${err.message}`);
   }
 }
 
@@ -1167,6 +1173,7 @@ export async function syncInvoiceToFirestore(inv: InvoiceRecord) {
     console.log(`[Firebase] Synced invoice ${inv.invoiceNumber} to Firestore.`);
   } catch (err: any) {
     console.error(`[Firebase Error] Failed to sync invoice: ${err.message}`);
+    throw new Error(`Firebase could not save invoice: ${err.message}`);
   }
 }
 
@@ -1217,66 +1224,14 @@ async function fetchFirestoreCollectionRest(collectionName: string): Promise<any
 }
 
 export async function syncDataFromFirebase(): Promise<boolean> {
-  if (isInitialized && departments.length > 0 && budgetAllocations.length > 0) {
-    console.log('[Firebase REST Mode] Active dataset already present in memory cache.');
+  if (firebaseDataSynced && departments.length > 0 && budgetAllocations.length > 0) {
+    console.log('[Firebase] Remote dataset is already hydrated in memory.');
     return true;
   }
 
   if (!isFirebaseEnabled() || !getFirestoreDb()) {
-    console.log('[Firebase REST Mode] Initializing direct Firestore REST API sync from collegefinance-87409...');
-    try {
-      const fetchedDepts = await fetchFirestoreCollectionRest('departments');
-      const fetchedAllocs = await fetchFirestoreCollectionRest('budgetAllocations');
-      if (fetchedDepts.length === 0 || fetchedAllocs.length === 0) {
-        console.log('[Firebase REST Mode] Firestore empty or rate-limited (HTTP 429). Loading embedded master dataset...');
-        if (departments.length === 0) {
-          loadEmbeddedDataset();
-        }
-        return true;
-      }
-      departments = fetchedDepts.sort((a, b) => Number(a.id) - Number(b.id));
-      const restUsers = await fetchFirestoreCollectionRest('users');
-      if (restUsers && restUsers.length > 0) {
-        users = restUsers.sort((a: any, b: any) => Number(a.id) - Number(b.id));
-      } else {
-        if (!users || users.length === 0) users = JSON.parse(JSON.stringify(EMBEDDED_USERS));
-      }
-      const fetchedHeads = await fetchFirestoreCollectionRest('budgetHeads');
-      if (fetchedHeads.length > 0) {
-        budgetHeads = fetchedHeads.sort((a, b) => Number(a.id) - Number(b.id));
-      }
-      budgetAllocations = fetchedAllocs.sort((a, b) => Number(a.id) - Number(b.id));
-      
-      const fetchedPRs = await fetchFirestoreCollectionRest('prs');
-      if (fetchedPRs.length >= 50) {
-        fetchedPRs.forEach((pr: PRRecord) => {
-          if (pr.items) prItemsMap.set(pr.id, pr.items);
-        });
-        prRecords = fetchedPRs.sort((a, b) => Number(b.id) - Number(a.id));
-      } else {
-        console.log(`[Firebase REST Mode] Firestore has only ${fetchedPRs.length} PRs. Loading complete embedded PR dataset (${EMBEDDED_PRS.length} PRs)...`);
-        prRecords = JSON.parse(JSON.stringify(EMBEDDED_PRS));
-        prRecords.forEach(pr => {
-          if (pr.items) prItemsMap.set(pr.id, pr.items);
-        });
-      }
-      
-      const fetchedInvoices = await fetchFirestoreCollectionRest('invoices');
-      if (fetchedInvoices.length > 0) {
-        invoiceRecords = fetchedInvoices.sort((a, b) => Number(b.id) - Number(a.id));
-      }
-      
-      recalculateCommittedAmounts();
-      isInitialized = true;
-      console.log(`[Firebase REST Mode] Successfully synced from Firestore: ${departments.length} depts, ${users.length} users, ${budgetHeads.length} heads, ${budgetAllocations.length} allocs, ${prRecords.length} PRs, ${invoiceRecords.length} invoices.`);
-      return true;
-    } catch (err: any) {
-      console.error('[Firebase REST Sync Error]', err.message);
-      if (departments.length === 0) {
-        loadEmbeddedDataset();
-      }
-      return false;
-    }
+    console.error('[Firebase] Admin SDK is unavailable; remote data was not loaded.');
+    return false;
   }
 
   const db = getFirestoreDb()!;
@@ -1288,8 +1243,10 @@ export async function syncDataFromFirebase(): Promise<boolean> {
     const deptSnap = await db.collection('departments').get();
     const allocSnap = await db.collection('budgetAllocations').get();
     if (deptSnap.empty || allocSnap.empty) {
-      console.log('[Firebase] Firestore is missing master budget. Loading original dataset from Excel reference file...');
+      console.log('[Firebase] Firestore is missing master budget. Loading and seeding the embedded master dataset...');
       loadSeedData(true);
+      await seedFirebaseFromLocalData();
+      firebaseDataSynced = true;
       return true;
     }
 
@@ -1331,7 +1288,7 @@ export async function syncDataFromFirebase(): Promise<boolean> {
       });
     }
     
-    if (fetchedPRs.length >= 50) {
+    if (fetchedPRs.length > 0) {
       prRecords = fetchedPRs.sort((a, b) => Number(b.id) - Number(a.id));
     } else {
       console.log(`[Firebase Sync] Firestore has only ${fetchedPRs.length} PRs. Loading complete embedded PR dataset (${EMBEDDED_PRS.length} PRs)...`);
@@ -1353,6 +1310,7 @@ export async function syncDataFromFirebase(): Promise<boolean> {
     recalculateCommittedAmounts();
 
     isInitialized = true;
+    firebaseDataSynced = true;
     console.log(`[Firebase] Successfully synced from Firestore: ${departments.length} departments, ${users.length} users, ${budgetHeads.length} budget heads, ${budgetAllocations.length} allocations, ${prRecords.length} PRs, ${invoiceRecords.length} invoices.`);
     return true;
   } catch (error: any) {
@@ -1360,6 +1318,22 @@ export async function syncDataFromFirebase(): Promise<boolean> {
     console.log('[Firebase] Falling back to local data modes.');
     return false;
   }
+}
+
+export async function syncUserToFirestore(user: User): Promise<void> {
+  if (!isFirebaseEnabled()) return;
+  const db = getFirestoreDb();
+  if (!db) throw new Error('Firebase is enabled, but Firestore is unavailable.');
+  try {
+    const cleaned = JSON.parse(JSON.stringify(user));
+    await db.collection('users').doc(String(user.email).toLowerCase()).set(cleaned, { merge: true });
+  } catch (err: any) {
+    throw new Error(`Firebase could not save user: ${err.message}`);
+  }
+}
+
+export function isFirebaseDatasetLoaded(): boolean {
+  return firebaseDataSynced;
 }
 
 export async function seedFirebaseFromLocalData() {
@@ -1391,7 +1365,7 @@ export async function seedFirebaseFromLocalData() {
     await writeInBatches('departments', departments, (item) => item.code);
     await writeInBatches('users', users, (item) => item.email);
     await writeInBatches('budgetHeads', budgetHeads, (item) => String(item.code));
-    await writeInBatches('budgetAllocations', budgetAllocations, (item) => item.sourceBudgetCode);
+    await writeInBatches('budgetAllocations', budgetAllocations, (item) => item.sourceBudgetCode || `${item.budgetHeadCode}_${item.departmentCode}`);
     await writeInBatches('prs', prRecords, (item) => item.prNumber);
 
     // Seed invoices if available
@@ -1403,6 +1377,7 @@ export async function seedFirebaseFromLocalData() {
     console.log('[Firebase] Firestore seeding complete.');
   } catch (err: any) {
     console.error(`[Firebase Error] Failed to seed Firestore: ${err.message}`);
+    throw new Error(`Firebase synchronization failed: ${err.message}`);
   }
 }
 

@@ -196,7 +196,7 @@ export function getBudgetHeadsList(req: AuthenticatedRequest, res: Response) {
   }
 }
 
-export function updateBudgetAllocation(req: AuthenticatedRequest, res: Response) {
+export async function updateBudgetAllocation(req: AuthenticatedRequest, res: Response) {
   try {
     const { allocationId, allocatedAmount } = req.body;
 
@@ -205,7 +205,7 @@ export function updateBudgetAllocation(req: AuthenticatedRequest, res: Response)
     }
 
     const { updateAllocationAmount } = require('../utils/seedData');
-    const updated = updateAllocationAmount(parseInt(allocationId, 10), parseFloat(allocatedAmount));
+    const updated = await updateAllocationAmount(parseInt(allocationId, 10), parseFloat(allocatedAmount));
 
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Budget allocation record not found.' });
@@ -221,7 +221,7 @@ export function updateBudgetAllocation(req: AuthenticatedRequest, res: Response)
   }
 }
 
-export function createBudgetAllocation(req: AuthenticatedRequest, res: Response) {
+export async function createBudgetAllocation(req: AuthenticatedRequest, res: Response) {
   try {
     const { departmentId, budgetHeadId, allocatedAmount, financialYear } = req.body;
 
@@ -233,7 +233,7 @@ export function createBudgetAllocation(req: AuthenticatedRequest, res: Response)
     }
 
     const { createOrUpdateBudgetAllocation } = require('../utils/seedData');
-    const allocation = createOrUpdateBudgetAllocation(
+    const allocation = await createOrUpdateBudgetAllocation(
       parseInt(departmentId, 10),
       parseInt(budgetHeadId, 10),
       parseFloat(allocatedAmount),

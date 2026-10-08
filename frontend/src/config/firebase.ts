@@ -4,13 +4,13 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 // Firebase web app configuration loaded from environment variables
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'collegefinance-87409',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || '',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyC3du30zsCt2pclFhNPdV9lD2I_QR7-E3Y",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "collegefinance-87409.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "collegefinance-87409",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "collegefinance-87409.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "954060858433",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:954060858433:web:deec286579fd68b5c752c0",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-SSKC7S67BM"
 };
 
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);

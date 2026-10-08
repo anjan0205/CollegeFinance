@@ -65,11 +65,20 @@ async function seedFirebase() {
     for (const colName of collectionsToClear) {
       const snapshot = await db.collection(colName).get();
       if (snapshot.size > 0) {
-        const deleteBatch = db.batch();
-        snapshot.docs.forEach((doc: any) => {
+        let deleteBatch = db.batch();
+        let count = 0;
+        for (const doc of snapshot.docs) {
           deleteBatch.delete(doc.ref);
-        });
-        await deleteBatch.commit();
+          count++;
+          if (count === 400) {
+            await deleteBatch.commit();
+            deleteBatch = db.batch();
+            count = 0;
+          }
+        }
+        if (count > 0) {
+          await deleteBatch.commit();
+        }
         console.log(`   Deleted ${snapshot.size} documents from collection "${colName}"`);
       }
     }
