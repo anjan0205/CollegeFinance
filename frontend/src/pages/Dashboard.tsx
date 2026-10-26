@@ -146,7 +146,7 @@ export const Dashboard: React.FC = () => {
                 className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                <span>Review Pending Approvals ⚡</span>
+                <span>Review Pending Approvals</span>
               </button>
               <button
                 onClick={() => navigate('/prs/all')}

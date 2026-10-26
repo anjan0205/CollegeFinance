@@ -150,7 +150,7 @@ export const Login: React.FC = () => {
           {/* Quick Demo Login Preset Buttons */}
           <div className="relative z-10 mt-6 pt-5 border-t border-white/15 space-y-3">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider text-center">
-              ⚡ Quick 1-Click Demo Logins
+              Quick 1-Click Demo Logins
             </p>
             <div className="grid grid-cols-2 gap-2">
               <button

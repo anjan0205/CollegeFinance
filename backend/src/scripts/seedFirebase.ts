@@ -3,24 +3,24 @@ import { initializeFirebase, getFirestoreDb } from '../config/firebase';
 import { User } from '../types';
 
 async function seedFirebase() {
-  console.log('🏁 Starting Firebase Seeding Script...');
+  console.log('[Seed] Starting Firebase Seeding Script...');
 
   // Initialize Firebase Admin
   const initialized = initializeFirebase();
   if (!initialized) {
-    console.error('❌ Firebase failed to initialize. Make sure you have setup credentials or running Emulator.');
+    console.error('[Error] Firebase failed to initialize. Make sure you have setup credentials or running Emulator.');
     process.exit(1);
   }
 
   const db = getFirestoreDb();
   if (!db) {
-    console.error('❌ Firestore Database instance is not available.');
+    console.error('[Error] Firestore Database instance is not available.');
     process.exit(1);
   }
 
   try {
     // 1. Run Excel parsing engine
-    console.log('📊 Parsing Excel spreadsheet data...');
+    console.log('[Seed] Parsing Excel spreadsheet data...');
     const data = await runFullImport();
     
     const { departments, budgetHeads, allocations, prs } = data;
@@ -56,11 +56,11 @@ async function seedFirebase() {
         console.log(`[Firebase] Committed final batch of ${count} for collection "${collectionName}"`);
       }
       
-      console.log(`✅ Collection "${collectionName}" seed complete. Total documents: ${totalCount}`);
+      console.log(`[Seed] Collection "${collectionName}" seed complete. Total documents: ${totalCount}`);
     };
 
     // 2. Clear collections first (optional but recommended for clean seed)
-    console.log('🗑️ Clearing existing Firestore collections...');
+    console.log('[Seed] Clearing existing Firestore collections...');
     const collectionsToClear = ['departments', 'users', 'budgetHeads', 'budgetAllocations', 'prs', 'invoices'];
     for (const colName of collectionsToClear) {
       const snapshot = await db.collection(colName).get();
@@ -84,11 +84,11 @@ async function seedFirebase() {
     }
 
     // 3. Seed Departments
-    console.log('⚙️ Seeding Departments...');
+    console.log('[Seed] Seeding Departments...');
     await writeInBatches('departments', departments, (item) => item.code);
 
     // 4. Seed Users
-    console.log('👤 Seeding Default Users...');
+    console.log('[Seed] Seeding Default Users...');
     const financeDept = departments.find((d: any) => d.code === 'FINANCE');
     const cseDept = departments.find((d: any) => d.code === 'CSE');
     const eceDept = departments.find((d: any) => d.code === 'ECE');
@@ -103,31 +103,31 @@ async function seedFirebase() {
     await writeInBatches('users', defaultUsers, (item) => item.email);
 
     // 5. Seed Budget Heads
-    console.log('⚙️ Seeding Budget Heads...');
+    console.log('[Seed] Seeding Budget Heads...');
     await writeInBatches('budgetHeads', budgetHeads, (item) => String(item.code));
 
     // 6. Seed Budget Allocations
-    console.log('⚙️ Seeding Budget Allocations...');
+    console.log('[Seed] Seeding Budget Allocations...');
     await writeInBatches('budgetAllocations', allocations, (item) => item.sourceBudgetCode);
 
     // 7. Seed PRs (with nested items)
-    console.log('⚙️ Seeding Purchase Requests (PRs)...');
+    console.log('[Seed] Seeding Purchase Requests (PRs)...');
     await writeInBatches('prs', prs, (item) => item.prNumber);
 
     // 8. Seed Invoices
-    console.log('⚙️ Seeding Default Invoices...');
+    console.log('[Seed] Seeding Default Invoices...');
     const { initDefaultInvoices, getSeedInvoices } = require('../utils/seedData');
     initDefaultInvoices();
     const defaultInvoices = getSeedInvoices();
     await writeInBatches('invoices', defaultInvoices, (item) => item.invoiceNumber);
 
     console.log('\n============================================================');
-    console.log('🎉 FIREBASE SEEDING COMPLETED SUCCESSFULLY!');
+    console.log('[Success] FIREBASE SEEDING COMPLETED SUCCESSFULLY!');
     console.log('============================================================\n');
     process.exit(0);
 
   } catch (error) {
-    console.error('❌ Seeding failed with error:', error);
+    console.error('[Error] Seeding failed with error:', error);
     process.exit(1);
   }
 }

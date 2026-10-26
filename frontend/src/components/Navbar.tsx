@@ -296,7 +296,7 @@ export const Navbar: React.FC = () => {
               </div>
               <div className="max-h-96 overflow-y-auto">
                 {visible.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-sm text-slate-400 font-medium">You're all caught up 🎉</div>
+                  <div className="px-4 py-8 text-center text-sm text-slate-400 font-medium">You're all caught up</div>
                 ) : (
                   visible.map(n => (
                     <div

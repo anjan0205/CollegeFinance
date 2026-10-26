@@ -335,12 +335,12 @@ export const RFQManagementPage: React.FC = () => {
                               <div className="flex flex-wrap gap-1.5 pt-1">
                                 {isLowest && (
                                   <span className="text-[11px] font-bold bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-full">
-                                    ★ Lowest Price
+                                    Lowest Price
                                   </span>
                                 )}
                                 {isFastest && (
                                   <span className="text-[11px] font-bold bg-amber-100 text-amber-700 px-2.5 py-0.5 rounded-full">
-                                    ⚡ Fastest ({quote.deliveryDays} days)
+                                    Fastest ({quote.deliveryDays} days)
                                   </span>
                                 )}
                               </div>

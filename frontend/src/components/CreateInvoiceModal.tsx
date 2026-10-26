@@ -207,7 +207,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
               type="text"
               value={prSearchQuery}
               onChange={(e) => setPrSearchQuery(e.target.value)}
-              placeholder="🔍 Search PR # (e.g. PR/APR26/001), Dept, Budget Code, Requestor..."
+              placeholder="Search PR # (e.g. PR/APR26/001), Dept, Budget Code, Requestor..."
               className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-brand-500 font-medium"
             />
 

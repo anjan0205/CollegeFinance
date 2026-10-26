@@ -330,9 +330,9 @@ export const PRDetailsModal: React.FC<PRDetailsModalProps> = ({ pr: initialPr, o
                 <p className="text-[11px] text-slate-300 italic mb-3">
                   {pr.ceoRemarks || (
                     principalStatus === 'REJECTED'
-                      ? `🚫 Workflow Terminated: Requisition was REJECTED by Principal (${pr.principalName || 'Dr. V. Rama Rao'}). CEO approval is permanently disabled.`
+                      ? `Workflow Terminated: Requisition was REJECTED by Principal (${pr.principalName || 'Dr. V. Rama Rao'}). CEO approval is permanently disabled.`
                       : principalStatus !== 'APPROVED'
-                      ? '🔒 Locked until Tier 1 Principal sign-off'
+                      ? 'Locked until Tier 1 Principal sign-off'
                       : 'Waiting for CEO approval'
                   )}
                 </p>

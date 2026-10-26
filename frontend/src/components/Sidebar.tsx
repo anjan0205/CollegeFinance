@@ -89,7 +89,7 @@ export const Sidebar: React.FC = () => {
 
             {prOpen && (
               <div className="ml-4 pl-3 border-l border-slate-800/80 my-1 space-y-0.5 text-xs">
-                <NavLink to="/prs/pending" className={({ isActive }) => `block px-2.5 py-1.5 rounded-md transition-all ${isActive ? 'text-white font-semibold bg-slate-800/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'}`}>Pending Approvals ⚡</NavLink>
+                <NavLink to="/prs/pending" className={({ isActive }) => `block px-2.5 py-1.5 rounded-md transition-all ${isActive ? 'text-white font-semibold bg-slate-800/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'}`}>Pending Approvals</NavLink>
                 <NavLink to="/prs/approved" className={({ isActive }) => `block px-2.5 py-1.5 rounded-md transition-all ${isActive ? 'text-white font-semibold bg-slate-800/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'}`}>Approved PRs</NavLink>
                 <NavLink to="/prs/rejected" className={({ isActive }) => `block px-2.5 py-1.5 rounded-md transition-all ${isActive ? 'text-white font-semibold bg-slate-800/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'}`}>Rejected PRs</NavLink>
                 <NavLink to="/prs/all" className={({ isActive }) => `block px-2.5 py-1.5 rounded-md transition-all ${isActive ? 'text-white font-semibold bg-slate-800/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'}`}>All PRs</NavLink>
